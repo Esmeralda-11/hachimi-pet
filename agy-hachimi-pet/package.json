@@ -1,0 +1,32 @@
+{
+  "name": "agy-hachimi-pet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Source workspace for Hachimi Pet (hachimi-pet) — Starry Catgirl Desktop Pet HUD for Google Antigravity",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev:vite": "vite --port 5179 --strictPort",
+    "dev:electron": "wait-on http://127.0.0.1:5179 && electron . --dev",
+    "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
+    "build": "tsc && vite build",
+    "build:plugin": "npm run build && node scripts/build-plugin.mjs",
+    "start": "electron .",
+    "bridge:test": "node electron/bridge-server.cjs --standalone"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^33.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  }
+}
