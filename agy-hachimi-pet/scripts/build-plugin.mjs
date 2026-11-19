@@ -26,22 +26,33 @@ fs.writeFileSync(
   'utf8'
 );
 
+const IGNORED_BASENAMES = new Set(['__pycache__', '.DS_Store']);
+const IGNORED_EXTENSIONS = new Set(['.pyc', '.pyo']);
+
+function shouldCopyPayloadEntry(src) {
+  const base = path.basename(src);
+  if (IGNORED_BASENAMES.has(base)) return false;
+  const ext = path.extname(base).toLowerCase();
+  if (IGNORED_EXTENSIONS.has(ext)) return false;
+  return true;
+}
+
 // 2. Copy electron/*.cjs
 const electronDest = path.join(APP_ROOT, 'electron');
 fs.rmSync(electronDest, { recursive: true, force: true });
-fs.cpSync(path.join(REPO_ROOT, 'electron'), electronDest, { recursive: true });
+fs.cpSync(path.join(REPO_ROOT, 'electron'), electronDest, { recursive: true, filter: shouldCopyPayloadEntry });
 
 // 3. Copy built dist/
 const distDest = path.join(APP_ROOT, 'dist');
 fs.rmSync(distDest, { recursive: true, force: true });
-fs.cpSync(path.join(REPO_ROOT, 'dist'), distDest, { recursive: true });
+fs.cpSync(path.join(REPO_ROOT, 'dist'), distDest, { recursive: true, filter: shouldCopyPayloadEntry });
 
 // 3b. Copy lightweight Windows WebView2 native shell (< 1 MB, zero Electron runtime needed on Windows)
 const shellBinSrc = path.join(REPO_ROOT, 'shell-win32', 'bin');
 const shellDest = path.join(APP_ROOT, 'shell-win32');
 if (fs.existsSync(path.join(shellBinSrc, 'HachimiPetShell.exe'))) {
   fs.rmSync(shellDest, { recursive: true, force: true });
-  fs.cpSync(shellBinSrc, shellDest, { recursive: true });
+  fs.cpSync(shellBinSrc, shellDest, { recursive: true, filter: shouldCopyPayloadEntry });
   const wv2Lic = path.join(REPO_ROOT, 'shell-win32', 'vendor', 'WebView2-LICENSE.txt');
   if (fs.existsSync(wv2Lic)) {
     fs.copyFileSync(wv2Lic, path.join(shellDest, 'WebView2-LICENSE.txt'));

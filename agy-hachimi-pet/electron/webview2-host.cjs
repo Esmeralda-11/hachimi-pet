@@ -16,11 +16,13 @@ function resolveShellExe() {
   return '';
 }
 
-function resolveTrayIcon() {
+function resolveTrayIcon(bridge) {
+  const activeThumb = bridge?.getActiveThumbPath?.();
   const candidates = [
+    activeThumb,
     path.join(APP_ROOT, 'dist', 'coopanion', 'whale', 'thumbs', 'astral.png'),
     path.join(APP_ROOT, 'public', 'coopanion', 'whale', 'thumbs', 'astral.png'),
-  ];
+  ].filter(Boolean);
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
@@ -68,7 +70,7 @@ async function main() {
     `--url=http://127.0.0.1:${DEFAULT_PORT}/`,
     `--owner-pid=${process.pid}`,
   ];
-  const iconPath = resolveTrayIcon();
+  const iconPath = resolveTrayIcon(bridge);
   if (iconPath) {
     shellArgs.push(`--icon=${iconPath}`);
   }

@@ -35,22 +35,29 @@ function shortPathLabel(p) {
   return parts.slice(-1)[0] || parts.slice(-2).join('/');
 }
 
+/**
+ * Match monitor sentinel names (`monitor`, `r8-monitor`, `swarm_monitor`, etc.) that must never spawn pets.
+ */
+function isMonitorMemberName(name) {
+  return /^(monitor|.*[-_]monitor)$/i.test(String(name || '').trim());
+}
+
 function friendlyRoleForType(typeName, rawRole) {
   const t = String(typeName || '').toLowerCase();
   if (rawRole && String(rawRole).trim()) return String(rawRole).trim();
-  if (t === 'research') return '🔍 调研探查员';
-  if (t === 'browser') return '🌐 浏览器特工';
-  if (t === 'image-generator') return '🎨 视觉画师';
-  if (t === 'self') return '🤖 镜像分身';
-  if (t === 'teamwork') return '👑 团队哨兵';
-  if (t === 'teamwork_interviewer') return '🎤 需求访谈官';
-  if (t === 'teamwork_orchestrator') return '🧭 主调度官';
-  if (t === 'teamwork_explorer') return '🔭 代码勘探员';
-  if (t === 'teamwork_worker') return '🛠️ 核心工程师';
-  if (t === 'teamwork_reviewer') return '📐 代码审查员';
-  if (t === 'teamwork_challenger') return '⚔️ 红队挑战者';
-  if (t === 'teamwork_auditor') return '⚖️ 终审审计官';
-  return typeName ? `🧩 ${typeName}` : '🐳 协作子代理';
+  if (t === 'research') return '调研探查';
+  if (t === 'browser') return '浏览器操作';
+  if (t === 'image-generator') return '视觉绘制';
+  if (t === 'self') return '镜像分身';
+  if (t === 'teamwork') return '团队哨兵';
+  if (t === 'teamwork_interviewer') return '需求访谈';
+  if (t === 'teamwork_orchestrator') return '主调度';
+  if (t === 'teamwork_explorer') return '代码勘探';
+  if (t === 'teamwork_worker') return '核心工程';
+  if (t === 'teamwork_reviewer') return '代码审查';
+  if (t === 'teamwork_challenger') return '红队挑战';
+  if (t === 'teamwork_auditor') return '终审审计';
+  return typeName ? `${typeName}` : '协作子代理';
 }
 
 /**
@@ -127,42 +134,42 @@ function describeChildTool(toolName, rawArgs = {}) {
   const n = String(toolName || '').toLowerCase();
   if (/read_file|view_file/.test(n)) {
     const f = shortPathLabel(args.Path || args.TargetFile || '');
-    return `📖 读取 ${f || '文件'}`;
+    return `读取 ${f || '文件'}`;
   }
   if (/grep_search|find_by_name|list_dir/.test(n)) {
     const q = String(args.Query || args.Pattern || shortPathLabel(args.SearchPath || args.DirectoryPath || '')).slice(0, 26);
-    return `🔎 检索 ${q || '代码库'}`;
+    return `检索 ${q || '代码库'}`;
   }
   if (/write_file|edit_file|replace/.test(n)) {
     const f = shortPathLabel(args.Path || args.TargetFile || '');
-    if (/handoff\.md$/i.test(f)) return '📝 撰写交付报告 handoff.md';
-    if (/progress\.md$/i.test(f)) return '📊 同步任务进度表';
-    return `✍️ 编写 ${f || '代码'}`;
+    if (/handoff\.md$/i.test(f)) return '撰写交付报告 handoff.md';
+    if (/progress\.md$/i.test(f)) return '同步任务进度';
+    return `编辑 ${f || '代码'}`;
   }
   if (/run_command/.test(n)) {
     const cmd = String(args.toolSummary || args.CommandLine || args.command || '').trim();
-    return `⚡ 执行 ${cmd.slice(0, 30) || '终端命令'}`;
+    return `终端执行 ${cmd.slice(0, 30) || '命令'}`;
   }
   if (/search_web|read_url/.test(n)) {
     const q = String(args.query || args.Url || '').trim();
-    return `🌐 搜索 ${q.slice(0, 28) || '网页资料'}`;
+    return `检索 ${q.slice(0, 28) || '网页'}`;
   }
   if (/browser|click|navigate|screenshot|evaluate/.test(n)) {
-    return `🌐 操控浏览器页面…`;
+    return '操作浏览器页面';
   }
   if (/invoke_subagent/.test(n)) {
-    return `🐳 派发下级代理: ${args.Role || args.TypeName || '子任务'}`;
+    return `派发子代理 · ${args.Role || args.TypeName || '子任务'}`;
   }
   if (/post_message/.test(n)) {
-    return `📋 发布蜂群看板动态`;
+    return '发布看板消息';
   }
   if (/swarm_wait/.test(n)) {
-    return `💤 看板待命监听中`;
+    return '看板待命中';
   }
   if (/send_message/.test(n)) {
-    return `📨 向上级汇报执行成果`;
+    return '汇报执行结果';
   }
-  return `🔧 调用 ${toolName}`;
+  return `调用 ${toolName}`;
 }
 
 /**
@@ -305,8 +312,12 @@ function inspectSwarmBoard(boardPath) {
         result.latestByAgent.set(agent, { seq: post.seq, text });
         if (agent !== 'coordinator') {
           result.hasWorkerPost = true;
-        } else if (/\[done\]/i.test(text)) {
+          result.isDone = false;
+        } else if (/^\[done\]/i.test(text)) {
           result.isDone = true;
+        } else {
+          // A new assignment or follow-up round posted by coordinator after an earlier `[done]` reopens the board
+          result.isDone = false;
         }
       } catch { /* ignore */ }
     }
@@ -322,15 +333,17 @@ class SubagentTracker {
   /**
    * @param {{
    *   watcher: import('./transcript-watcher.cjs').TranscriptWatcher,
-   *   getMainSettings: () => { scheme: string, outfit: string, defaultWorkspace?: string },
+   *   getMainSettings: () => { packId?: string, scheme: string, outfit: string, defaultWorkspace?: string },
+   *   getActivePack?: () => { id: string, badgeEmoji?: string, defaultVariant?: string, variants?: Array<{ id: string }> },
    *   getWatchedRootIds: () => string[],
    *   onChange: () => void,
    *   onReaction: (ev: any) => void,
    * }} deps
    */
-  constructor({ watcher, getMainSettings, getWatchedRootIds, onChange, onReaction, brainRoots }) {
+  constructor({ watcher, getMainSettings, getActivePack, getWatchedRootIds, onChange, onReaction, brainRoots }) {
     this.watcher = watcher;
     this.getMainSettings = getMainSettings;
+    this.getActivePack = getActivePack;
     this.getWatchedRootIds = getWatchedRootIds;
     this.onChange = onChange;
     this.onReaction = onReaction;
@@ -350,10 +363,31 @@ class SubagentTracker {
     this.retiredKeys = new Set();
     /** @type {Set<string>} Coordinator conversationIds whose Swarm posted `[done]` or finished */
     this.closedSwarms = new Set();
+    /** @type {Map<string, number>} swarmKey -> timestampMs (60s grace window while waiting for members.json flush) */
+    this.pendingSwarmSpawns = new Map();
+    /** @type {Map<string, number>} coordinatorId -> timestampMs */
+    this.lastSwarmAddAt = new Map();
 
     this.seq = 1;
     this.pollTimer = setInterval(() => this._pollSwarmAndTeamworkFiles(), 1200);
     this.pollTimer.unref?.();
+  }
+
+  _getActivePack() {
+    const pack = this.getActivePack?.();
+    if (pack && Array.isArray(pack.variants) && pack.variants.length > 0) {
+      return pack;
+    }
+    return {
+      id: 'hachimi',
+      badgeEmoji: '',
+      defaultVariant: 'astral',
+      variants: SCHEME_LIST.map((id) => ({ id })),
+    };
+  }
+
+  _getBadgeEmoji() {
+    return this._getActivePack()?.badgeEmoji || '';
   }
 
   isChildConversation(cid) {
@@ -369,6 +403,7 @@ class SubagentTracker {
         typeName: it.typeName,
         source: it.source,
         slotIndex: it.slotIndex,
+        packId: it.packId || 'hachimi',
         scheme: it.scheme,
         outfit: it.outfit,
         status: it.status,
@@ -385,6 +420,7 @@ class SubagentTracker {
       this._finishAndRemove(it.id, { permanent: true, silent: true });
     }
     this.pendingByParent.clear();
+    this.pendingSwarmSpawns.clear();
     this.onChange();
   }
 
@@ -447,6 +483,26 @@ class SubagentTracker {
     return false;
   }
 
+  _isUtilityOnlySubagent(typeName) {
+    const t = String(typeName || '').trim().toLowerCase();
+    return t === 'image-generator';
+  }
+
+  _isSwarmTranscriptBusyWithBgTask(tp) {
+    if (!tp || !fs.existsSync(tp)) return false;
+    const act = inspectTranscriptActivity(tp);
+    return Boolean(act.exists && act.hasRunningBgTask && !act.waitingOnSwarmBoard);
+  }
+
+  _resolveMemberTranscriptPath(brainRoot, convId) {
+    if (!convId) return '';
+    if (brainRoot) {
+      const direct = path.join(brainRoot, convId, '.system_generated', 'logs', 'transcript.jsonl');
+      if (fs.existsSync(direct)) return direct;
+    }
+    return this.knownConvMeta.get(convId)?.transcriptPath || findTranscriptPath(convId) || '';
+  }
+
   _isSwarmMemberWorkingOnDisk(coordinatorId, memberName, childCid) {
     if (!coordinatorId) return null;
     for (const brainRoot of this.brainRoots) {
@@ -459,7 +515,19 @@ class SubagentTracker {
           members[memberName] ||
           Object.values(members).find((x) => x && x.conversation_id === childCid);
         if (!m) return null;
-        return !m.killed && String(m.phase || '').toUpperCase() === 'RUNNING' && m.wake_mode === 'working';
+        const isKilled = Boolean(
+          m.killed ||
+          String(m.phase || '').toUpperCase() === 'KILLED' ||
+          String(m.desired_state || '').toUpperCase() === 'KILLED'
+        );
+        if (isKilled || String(m.phase || '').toUpperCase() !== 'RUNNING') {
+          return false;
+        }
+        if (m.wake_mode === 'working') {
+          return true;
+        }
+        const tp = this._resolveMemberTranscriptPath(brainRoot, m.conversation_id || childCid);
+        return this._isSwarmTranscriptBusyWithBgTask(tp);
       } catch {
         return null;
       }
@@ -469,8 +537,8 @@ class SubagentTracker {
 
   /**
    * Called when Antigravity `Stop` hook fires for a specific subagent conversationId.
-   * Only removes the subagent if it has NO active child subagents, NO running background tasks,
-   * and is NOT an actively working Swarm member!
+   * Removes finished subagents/swarm workers unless they still have active descendants,
+   * running background tasks, or disk-confirmed `working` status.
    */
   handleSessionStopped(conversationId) {
     if (!conversationId) return;
@@ -482,11 +550,9 @@ class SubagentTracker {
 
     if (item.source === 'swarm') {
       const diskWorking = this._isSwarmMemberWorkingOnDisk(item.parentConversationId, item.name, conversationId);
-      if (diskWorking !== true && item.status !== 'WAITING') {
-        item.status = 'WAITING';
-        item.progressText = '💤 休息待命中 · 等待唤醒…';
-        item.updatedAt = Date.now();
-        this.onChange();
+      const bgBusy = diskWorking === null && this._isSwarmTranscriptBusyWithBgTask(item.transcriptPath);
+      if (diskWorking !== true && !bgBusy) {
+        this._finishAndRemove(vid, { permanent: false });
       }
       return;
     }
@@ -506,6 +572,12 @@ class SubagentTracker {
   handleSwarmCompleted(coordinatorId) {
     if (!coordinatorId) return;
     this.closedSwarms.add(coordinatorId);
+    const prefix = `swarm:${coordinatorId}:`;
+    for (const k of Array.from(this.pendingSwarmSpawns.keys())) {
+      if (k.startsWith(prefix)) {
+        this.pendingSwarmSpawns.delete(k);
+      }
+    }
 
     const toRemove = [];
     for (const it of this.items.values()) {
@@ -547,45 +619,43 @@ class SubagentTracker {
   }
 
   _allocateStyle(seed) {
-    const main = this.getMainSettings?.() || { scheme: 'astral', outfit: 'maid' };
-    const mainScheme = normalizeSchemeId(main.scheme);
-    const usedCombos = new Set([`${mainScheme}-maid`]);
+    const pack = this._getActivePack();
+    const packId = pack?.id || 'hachimi';
+    const pool = Array.isArray(pack?.variants) && pack.variants.length > 0
+      ? pack.variants.map((v) => v.id)
+      : SCHEME_LIST;
+    const main = this.getMainSettings?.() || { packId: 'hachimi', scheme: 'astral', outfit: 'maid' };
+    const rawMain = String(main.scheme || pack?.defaultVariant || pool[0] || 'astral');
+    const mainScheme = packId === 'hachimi'
+      ? normalizeSchemeId(rawMain)
+      : (pool.includes(rawMain) ? rawMain : (pack?.defaultVariant || pool[0]));
+
     const usedSchemes = new Set([mainScheme]);
+    const usageCounts = new Map(pool.map((id) => [id, id === mainScheme ? 1 : 0]));
     for (const it of this.items.values()) {
-      const sNorm = normalizeSchemeId(it.scheme);
-      usedCombos.add(`${sNorm}-maid`);
+      if ((it.packId || 'hachimi') !== packId) continue;
+      const sNorm = packId === 'hachimi' ? normalizeSchemeId(it.scheme) : it.scheme;
       usedSchemes.add(sNorm);
+      usageCounts.set(sNorm, (usageCounts.get(sNorm) || 0) + 1);
     }
 
-    const allCombos = [];
-    for (const s of SCHEME_LIST) {
-      for (const o of OUTFIT_LIST) {
-        allCombos.push({ scheme: s, outfit: o, key: `${s}-${o}` });
-      }
+    // Sequential selection of distinct unused variants from active pack's pool (avoiding main pet's active scheme)
+    const firstUnused = pool.find((id) => !usedSchemes.has(id));
+    if (firstUnused) {
+      return { packId, scheme: firstUnused, outfit: 'maid' };
     }
 
-    let hash = 0;
-    const str = String(seed || Math.random());
-    for (let i = 0; i < str.length; i++) {
-      hash = (hash * 33 + str.charCodeAt(i)) >>> 0;
-    }
-
-    for (let step = 0; step < allCombos.length; step++) {
-      const idx = (hash + step * 7) % allCombos.length;
-      const cand = allCombos[idx];
-      if (!usedSchemes.has(cand.scheme) && !usedCombos.has(cand.key)) {
-        return { scheme: cand.scheme, outfit: cand.outfit };
+    // All variants in pool are currently occupied: pick the least-used one (still preferring non-main first)
+    let bestId = pool[0];
+    let bestScore = Infinity;
+    for (const id of pool) {
+      const score = (usageCounts.get(id) || 0) + (id === mainScheme && pool.length > 1 ? 0.5 : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        bestId = id;
       }
     }
-    for (let step = 0; step < allCombos.length; step++) {
-      const idx = (hash + step * 5) % allCombos.length;
-      const cand = allCombos[idx];
-      if (!usedCombos.has(cand.key)) {
-        return { scheme: cand.scheme, outfit: cand.outfit };
-      }
-    }
-    const fallback = allCombos[hash % allCombos.length];
-    return { scheme: fallback.scheme, outfit: fallback.outfit };
+    return { packId, scheme: bestId, outfit: 'maid' };
   }
 
   /**
@@ -593,11 +663,11 @@ class SubagentTracker {
    */
   spawnTestSubagent(payload = {}) {
     const templates = [
-      { name: 'explorer_ui', role: '🔭 代码勘探员', text: '正在扫描界面组件与视觉层级…' },
-      { name: 'worker_core', role: '🛠️ 核心工程师', text: '正在重构多智能体同步引擎…' },
-      { name: 'swarm_verifier', role: '🐝 Swarm · 验证节点', text: '并行校验构建产物与点击穿透…' },
-      { name: 'challenger_qa', role: '⚔️ 红队挑战者', text: '压测并发天降动画与边界状态…' },
-      { name: 'browser_agent', role: '🌐 浏览器特工', text: '正在执行端到端可视化回归…' },
+      { name: 'explorer_ui', role: '代码勘探', text: '扫描界面组件与视觉层级' },
+      { name: 'worker_core', role: '核心工程', text: '同步多智能体状态' },
+      { name: 'swarm_verifier', role: '验证节点', text: '校验构建产物与点击穿透' },
+      { name: 'challenger_qa', role: '红队挑战', text: '验证并发动画与边界状态' },
+      { name: 'browser_agent', role: '浏览器验证', text: '执行端到端回归检查' },
     ];
     const tpl = templates[this.items.size % templates.length];
     const id = `whale_test_${Date.now()}_${this.seq++}`;
@@ -609,6 +679,7 @@ class SubagentTracker {
       typeName: 'test_subagent',
       source: 'test',
       slotIndex: this._allocateSlotIndex(),
+      packId: style.packId,
       scheme: style.scheme,
       outfit: style.outfit,
       status: 'WORKING',
@@ -622,7 +693,7 @@ class SubagentTracker {
     this.onReaction({
       expression: 'excited',
       motion: 'jump',
-      speech: `✨ 子代理「${item.name}」天降出击！（完成后将自动淡出退场～）`,
+      speech: `测试子代理「${item.name}」已生成。`,
     });
     this.onChange();
 
@@ -630,7 +701,7 @@ class SubagentTracker {
       const cur = this.items.get(id);
       if (cur) {
         cur.progressPercent = 72;
-        cur.progressText = '⚡ 正在推进核心步骤 (2/2)…';
+        cur.progressText = '推进核心步骤 (2/2)';
         cur.updatedAt = Date.now();
         this.onChange();
       }
@@ -650,14 +721,15 @@ class SubagentTracker {
     const args = normalizeToolArgs(rawArgs);
     if (toolName === 'invoke_subagent') {
       this._enqueueOrSpawnSubagent(parentConversationId, args, { quiet: false, origin: 'hook' });
+    } else if (toolName === 'send_message') {
+      this._handleSendMessage(args, { quiet: false });
     } else if (toolName === 'manage_subagents') {
       this._handleManageSubagents(parentConversationId, args);
     } else if (toolName === 'swarm') {
-      this.closedSwarms.delete(parentConversationId);
       this._handleSwarmToolCall(parentConversationId, args, { quiet: false });
     } else if (toolName === 'post_message') {
-      const text = String(args.text || '');
-      if (/\[done\]/i.test(text)) {
+      const text = String(args.text || '').trim();
+      if (/^\[done\]/i.test(text)) {
         this.handleSwarmCompleted(parentConversationId);
       }
     }
@@ -678,19 +750,22 @@ class SubagentTracker {
         if (!isStaleHistorical) {
           this._enqueueOrSpawnSubagent(conversationId, ev.args, { quiet, origin: 'transcript' });
         }
+      } else if (ev.toolName === 'send_message') {
+        if (!isStaleHistorical) {
+          this._handleSendMessage(ev.args, { quiet });
+        }
       } else if (ev.toolName === 'manage_subagents') {
         if (!isStaleHistorical) {
           this._handleManageSubagents(conversationId, ev.args);
         }
       } else if (ev.toolName === 'swarm') {
         if (!isStaleHistorical) {
-          if (!quiet) this.closedSwarms.delete(conversationId);
           this._handleSwarmToolCall(conversationId, ev.args, { quiet });
         }
       } else if (ev.toolName === 'post_message' && !quiet) {
-        const text = String(ev.args?.text || '');
-        // If coordinator posts `[done]`, immediately close & fade out all swarm workers!
-        if (!this.childConversations.has(conversationId) && /\[done\]/i.test(text)) {
+        const text = String(ev.args?.text || '').trim();
+        // If coordinator posts `[done]` at start of message, immediately close & fade out all swarm workers!
+        if (!this.childConversations.has(conversationId) && /^\[done\]/i.test(text)) {
           this.handleSwarmCompleted(conversationId);
           return;
         }
@@ -711,7 +786,16 @@ class SubagentTracker {
       const senderVid = this.convToVisualId.get(ev.sender);
       if (senderVid && !this._hasActiveDescendants(ev.sender)) {
         const senderItem = this.items.get(senderVid);
-        if (senderItem && senderItem.transcriptPath) {
+        if (senderItem && senderItem.source === 'swarm') {
+          const diskWorking = this._isSwarmMemberWorkingOnDisk(
+            senderItem.parentConversationId,
+            senderItem.name,
+            ev.sender
+          );
+          if (diskWorking !== true) {
+            this._finishAndRemove(senderVid, { permanent: false });
+          }
+        } else if (senderItem && senderItem.transcriptPath) {
           const act = inspectTranscriptActivity(senderItem.transcriptPath, senderItem.teamworkDir);
           if (act.finished || act.waitingOnSwarmBoard) {
             this._finishAndRemove(senderVid);
@@ -720,50 +804,44 @@ class SubagentTracker {
       }
     }
 
-    // 2. If `conversationId` is a known sleeping Swarm worker or browser/orchestrator that just woke up with live work, re-spawn it!
+    // 2. If `conversationId` is a known sleeping Swarm worker or subagent that just woke up with live work, re-spawn it!
     let visualId = this.convToVisualId.get(conversationId);
     if (!visualId && !quiet && this.knownConvMeta.has(conversationId) && !this.retiredKeys.has(conversationId)) {
       const meta = this.knownConvMeta.get(conversationId);
       const isWakeActivity =
         kind === 'thinking' ||
         (kind === 'tool_call' && ev.toolName !== 'swarm_wait' && ev.toolName !== 'read_board');
-      if (isWakeActivity && !this.closedSwarms.has(meta.parentConversationId)) {
+      if (isWakeActivity) {
         if (meta.source === 'swarm') {
-          if (meta.name !== 'monitor') {
+          if (
+            !isMonitorMemberName(meta.name) &&
+            this._isSwarmMemberWorkingOnDisk(meta.parentConversationId, meta.name, conversationId) === true
+          ) {
+            this.closedSwarms.delete(meta.parentConversationId);
+            this.retiredKeys.delete(`swarm:${meta.parentConversationId}:${meta.name}`);
+            this.retiredKeys.delete(conversationId);
             const revived = this._ensureSwarmMember(meta.parentConversationId, meta.name, {
               conversationId,
+              transcriptPath: meta.transcriptPath,
               role: meta.rawRole || 'Swarm Worker',
             });
             visualId = revived?.id;
           }
-        } else if (!this._isCoordinatorType(meta.typeName)) {
-          const id = `whale_sub_${Date.now()}_${this.seq++}`;
-          const style = this._allocateStyle(`${meta.name}_${conversationId}`);
-          const revived = {
-            id,
-            parentConversationId: meta.parentConversationId,
-            childConversationId: conversationId,
-            transcriptPath: meta.transcriptPath,
-            name: meta.name,
-            role: meta.role,
-            typeName: meta.typeName,
-            source: meta.source,
-            teamworkFolder: meta.teamworkFolder,
-            teamworkDir: meta.teamworkDir,
-            slotIndex: this._allocateSlotIndex(),
-            scheme: style.scheme,
-            outfit: style.outfit,
-            status: 'WORKING',
-            progressText: '🚀 恢复执行后续任务…',
-            progressPercent: 30,
-            stepCount: 1,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-          this.items.set(id, revived);
-          this.convToVisualId.set(conversationId, id);
-          visualId = id;
-          this.onChange();
+        } else if (
+          !this._isCoordinatorType(meta.typeName) &&
+          !this._isUtilityOnlySubagent(meta.typeName)
+        ) {
+          const act = meta.transcriptPath
+            ? inspectTranscriptActivity(meta.transcriptPath, meta.teamworkDir)
+            : { activelyWorking: true };
+          if (act.activelyWorking) {
+            const revived = this._spawnNonSwarmSubagent(meta, conversationId, {
+              progressText: '恢复执行后续任务',
+              progressPercent: 30,
+              quiet,
+            });
+            visualId = revived?.id;
+          }
         }
       }
     }
@@ -775,7 +853,7 @@ class SubagentTracker {
     if (kind === 'thinking') {
       item.status = 'THINKING';
       item.stepCount = (item.stepCount || 1) + 1;
-      item.progressText = `💭 ${ev.text.slice(0, 36)}`;
+      item.progressText = ev.text.slice(0, 36);
       if (!item.hasChecklistProgress) {
         item.progressPercent = Math.min(92, (item.progressPercent || 18) + 5);
       }
@@ -789,12 +867,14 @@ class SubagentTracker {
       item.stepCount = (item.stepCount || 1) + 1;
       item.lastToolName = tn;
 
-      // In Native Swarm, calling `swarm_wait` puts this worker into resting/sleeping mode (`WAITING` -> Whale sleep animation + Zzz)!
+      // In Native Swarm, `swarm_wait` puts this worker to sleep on the board; hide its pet once no longer working on disk!
       if (tn === 'swarm_wait') {
-        item.status = 'WAITING';
-        item.progressText = item.lastBoardSeq ? '💤 已汇报 · 睡眠待命中…' : '💤 休息待命中 · 等待唤醒…';
-        item.updatedAt = Date.now();
-        if (!quiet) this.onChange();
+        if (item.source === 'swarm' && !this._hasActiveDescendants(conversationId)) {
+          const diskWorking = this._isSwarmMemberWorkingOnDisk(item.parentConversationId, item.name, conversationId);
+          if (diskWorking !== true) {
+            this._finishAndRemove(item.id, { permanent: false, silent: Boolean(quiet) });
+          }
+        }
         return;
       }
 
@@ -827,16 +907,14 @@ class SubagentTracker {
     }
 
     // Subagent reached `assistant_reply` (`finalTurn`) or `turn_end`:
-    // Swarm members transition to sleeping (`WAITING`) until the Swarm itself finishes; other subagents fade out when done!
+    // Hide Swarm members once no longer working on disk (`permanent: false`), and hide finished subagents!
     if ((kind === 'assistant_reply' && ev.finalTurn) || kind === 'turn_end') {
       if (!quiet && !this._hasActiveDescendants(conversationId)) {
         if (item.source === 'swarm') {
           const diskWorking = this._isSwarmMemberWorkingOnDisk(item.parentConversationId, item.name, conversationId);
-          if (diskWorking !== true && item.status !== 'WAITING') {
-            item.status = 'WAITING';
-            item.progressText = item.lastBoardSeq ? '💤 已汇报 · 睡眠待命中…' : '💤 休息待命中 · 等待唤醒…';
-            item.updatedAt = Date.now();
-            this.onChange();
+          const bgBusy = diskWorking === null && this._isSwarmTranscriptBusyWithBgTask(item.transcriptPath);
+          if (diskWorking !== true && !bgBusy) {
+            this._finishAndRemove(item.id, { permanent: false });
           }
           return;
         }
@@ -853,107 +931,165 @@ class SubagentTracker {
     const ident = extractSubagentIdentity(rawArgs);
     const now = Date.now();
 
-    const pendingList = this.pendingByParent.get(parentConversationId) || [];
+    // Keep ONLY lightweight pending metadata until `subagent_created` provides the real `childConversationId`.
+    // This eliminates hook+transcript duplicate pets and prevents failed/rate-limited calls from creating phantom pets.
+    const rawList = this.pendingByParent.get(parentConversationId) || [];
+    const pendingList = rawList.filter((entry) => entry && now - (entry.createdAt || 0) < 90000);
+
     if (origin === 'transcript') {
-      for (const pid of pendingList) {
-        const existing = this.items.get(pid);
+      for (const entry of pendingList) {
         if (
-          existing &&
-          existing.spawnOrigin === 'hook' &&
-          !existing.matchedTranscript &&
-          !existing.childConversationId &&
-          existing.name === ident.name &&
-          now - existing.createdAt < 8000
+          entry.origin === 'hook' &&
+          !entry.matchedTranscript &&
+          entry.ident?.name === ident.name
         ) {
-          existing.matchedTranscript = true;
-          return existing;
+          entry.matchedTranscript = true;
+          this.pendingByParent.set(parentConversationId, pendingList);
+          return null;
+        }
+      }
+    } else if (origin === 'hook') {
+      for (const entry of pendingList) {
+        if (
+          entry.origin === 'transcript' &&
+          !entry.matchedHook &&
+          entry.ident?.name === ident.name &&
+          now - entry.createdAt < 15000
+        ) {
+          entry.matchedHook = true;
+          this.pendingByParent.set(parentConversationId, pendingList);
+          return null;
         }
       }
     }
 
-    if (quiet) {
-      pendingList.push(JSON.stringify({ deferred: true, ident }));
-      this.pendingByParent.set(parentConversationId, pendingList);
-      return null;
-    }
+    pendingList.push({
+      ident,
+      origin,
+      quiet: Boolean(quiet),
+      matchedTranscript: origin === 'transcript',
+      matchedHook: origin === 'hook',
+      createdAt: now,
+    });
+    this.pendingByParent.set(parentConversationId, pendingList);
+    return null;
+  }
 
+  _spawnNonSwarmSubagent(meta, childConversationId, { progressText, progressPercent = 24, quiet = false, reaction = null } = {}) {
+    if (!childConversationId || this.convToVisualId.has(childConversationId)) return null;
+    const now = Date.now();
     const id = `whale_sub_${now}_${this.seq++}`;
-    const style = this._allocateStyle(`${ident.name}_${id}`);
+    const style = this._allocateStyle(`${meta.name}_${childConversationId}`);
     const item = {
       id,
-      spawnOrigin: origin,
-      matchedTranscript: origin === 'transcript',
-      parentConversationId,
-      childConversationId: null,
-      name: ident.name,
-      role: ident.role,
-      typeName: ident.typeName,
-      source: ident.source,
-      teamworkFolder: ident.teamworkFolder,
-      teamworkDir: ident.teamworkDir,
+      parentConversationId: meta.parentConversationId,
+      childConversationId,
+      transcriptPath: meta.transcriptPath || '',
+      name: meta.name,
+      role: meta.role,
+      typeName: meta.typeName,
+      source: meta.source,
+      teamworkFolder: meta.teamworkFolder || '',
+      teamworkDir: meta.teamworkDir || '',
       slotIndex: this._allocateSlotIndex(),
+      packId: style.packId,
       scheme: style.scheme,
       outfit: style.outfit,
       status: 'WORKING',
-      progressText: `🚀 ${ident.initialBrief}`,
-      progressPercent: 16,
+      progressText: progressText || meta.initialBrief || '协同运行中',
+      progressPercent,
       stepCount: 1,
       createdAt: now,
       updatedAt: now,
     };
-
     this.items.set(id, item);
-    pendingList.push(id);
-    this.pendingByParent.set(parentConversationId, pendingList);
-
-    this.onReaction({
-      expression: 'love',
-      motion: 'wave',
-      speech: `🐳 子代理「${item.name}」天降支援啦！`,
-    });
+    this.convToVisualId.set(childConversationId, id);
+    if (reaction && !quiet) {
+      this.onReaction(reaction);
+    }
     this.onChange();
     return item;
+  }
+
+  _handleSendMessage(rawArgs = {}, { quiet = false } = {}) {
+    const args = normalizeToolArgs(rawArgs);
+    const recipient = String(
+      args.Recipient || args.recipient || args.ConversationId || args.conversationId || ''
+    ).trim();
+    if (!recipient) return;
+
+    this.retiredKeys.delete(recipient);
+    const meta = this.knownConvMeta.get(recipient);
+    if (!meta) return;
+
+    const tp = meta.transcriptPath || findTranscriptPath(recipient);
+    if (tp && !meta.transcriptPath) {
+      meta.transcriptPath = tp;
+    }
+    if (tp && !this.watcher.has(recipient)) {
+      this.watcher.attach(recipient, tp, { maxInitialBytes: 65536 });
+    }
+
+    if (
+      !quiet &&
+      meta.source !== 'swarm' &&
+      !this.convToVisualId.has(recipient) &&
+      !this._isCoordinatorType(meta.typeName) &&
+      !this._isUtilityOnlySubagent(meta.typeName)
+    ) {
+      this._spawnNonSwarmSubagent(meta, recipient, {
+        progressText: '已唤醒 · 恢复执行任务',
+        progressPercent: 30,
+        quiet,
+      });
+    }
   }
 
   _bindCreatedSubagent(parentConversationId, childConversationId, childTranscriptPath, { quiet = false, isStaleHistorical = false } = {}) {
     if (!childConversationId) return;
     const resolvedPath = childTranscriptPath || findTranscriptPath(childConversationId);
+    const now = Date.now();
 
-    const pendingList = this.pendingByParent.get(parentConversationId) || [];
+    const rawList = this.pendingByParent.get(parentConversationId) || [];
+    const pendingList = rawList.filter((entry) => entry && now - (entry.createdAt || 0) < 90000);
     const head = pendingList.shift();
     if (pendingList.length === 0) {
       this.pendingByParent.delete(parentConversationId);
+    } else {
+      this.pendingByParent.set(parentConversationId, pendingList);
     }
+
+    // Always mark childConversationId so child hooks never hijack the user's main session
+    this.childConversations.add(childConversationId);
 
     if (this.convToVisualId.has(childConversationId)) {
       if (resolvedPath) {
-        this.childConversations.add(childConversationId);
         this.watcher.attach(childConversationId, resolvedPath);
       }
       return;
     }
 
-    let deferredIdent = null;
-    if (typeof head === 'string' && head.startsWith('{')) {
-      try { deferredIdent = JSON.parse(head).ident; } catch { /* ignore */ }
-    }
-
+    const deferredIdent = head?.ident || null;
     if (this.retiredKeys.has(childConversationId)) return;
+
+    // Do NOT spawn stage pets for internal asset-generation helper calls (`image-generator`)
+    if (deferredIdent && this._isUtilityOnlySubagent(deferredIdent.typeName)) {
+      this.retiredKeys.add(childConversationId);
+      return;
+    }
 
     const activity = inspectTranscriptActivity(resolvedPath, deferredIdent?.teamworkDir || '');
 
-    // Remember lineage metadata so we can trace descendants & wakeups
-    const metaIdent = deferredIdent || (typeof head === 'string' ? this.items.get(head) : null);
-    if (metaIdent) {
+    if (deferredIdent) {
       this.knownConvMeta.set(childConversationId, {
         parentConversationId,
         transcriptPath: resolvedPath,
-        name: metaIdent.name,
-        role: metaIdent.role,
-        typeName: metaIdent.typeName,
-        source: metaIdent.source,
-        teamworkFolder: metaIdent.teamworkFolder || '',
-        teamworkDir: metaIdent.teamworkDir || '',
+        name: deferredIdent.name,
+        role: deferredIdent.role,
+        typeName: deferredIdent.typeName,
+        source: deferredIdent.source,
+        teamworkFolder: deferredIdent.teamworkFolder || '',
+        teamworkDir: deferredIdent.teamworkDir || '',
       });
     }
 
@@ -961,74 +1097,54 @@ class SubagentTracker {
     const isRecentCoordinator =
       deferredIdent &&
       this._isCoordinatorType(deferredIdent.typeName) &&
-      Date.now() - activity.mtimeMs < 20 * 60 * 1000;
+      now - activity.mtimeMs < 20 * 60 * 1000;
 
-    if (quiet) {
-      if (isStaleHistorical && !isRecentCoordinator) return;
-      if (!activity.activelyWorking && !isRecentCoordinator) {
-        this.retiredKeys.add(childConversationId);
-        return;
-      }
+    if (quiet && isStaleHistorical && !isRecentCoordinator) {
+      this.retiredKeys.add(childConversationId);
+      return;
     }
 
-    let item = typeof head === 'string' && !head.startsWith('{') ? this.items.get(head) : null;
-    if (!item && (!quiet || activity.activelyWorking)) {
-      const ident = deferredIdent || {
-        name: `agent_${childConversationId.slice(0, 6)}`,
-        role: '🐳 协作子代理',
-        typeName: 'subagent',
-        source: 'subagent',
-        teamworkFolder: '',
-        teamworkDir: '',
-        initialBrief: '正在并行处理子任务…',
-      };
-      if (!(quiet && this._isCoordinatorType(ident.typeName))) {
-        const id = `whale_sub_${Date.now()}_${this.seq++}`;
-        const style = this._allocateStyle(`${ident.name}_${childConversationId}`);
-        item = {
-          id,
-          parentConversationId,
-          childConversationId,
-          transcriptPath: resolvedPath,
-          name: ident.name,
-          role: ident.role,
-          typeName: ident.typeName,
-          source: ident.source,
-          teamworkFolder: ident.teamworkFolder,
-          teamworkDir: ident.teamworkDir,
-          slotIndex: this._allocateSlotIndex(),
-          scheme: style.scheme,
-          outfit: style.outfit,
-          status: 'WORKING',
-          progressText: `🚀 ${ident.initialBrief}`,
-          progressPercent: 20,
-          stepCount: 1,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        this.items.set(id, item);
-      }
+    if (!activity.activelyWorking && !isRecentCoordinator) {
+      this.retiredKeys.add(childConversationId);
+      return;
     }
 
-    if (item) {
-      item.childConversationId = childConversationId;
-      item.transcriptPath = resolvedPath;
-      this.convToVisualId.set(childConversationId, item.id);
-      this.knownConvMeta.set(childConversationId, {
-        parentConversationId,
-        transcriptPath: resolvedPath,
-        name: item.name,
-        role: item.role,
-        typeName: item.typeName,
-        source: item.source,
-        teamworkFolder: item.teamworkFolder || '',
-        teamworkDir: item.teamworkDir || '',
+    const ident = deferredIdent || {
+      name: `agent_${childConversationId.slice(0, 6)}`,
+      role: '协作子代理',
+      typeName: 'subagent',
+      source: 'subagent',
+      teamworkFolder: '',
+      teamworkDir: '',
+      initialBrief: '正在处理子任务',
+    };
+
+    const meta = {
+      parentConversationId,
+      transcriptPath: resolvedPath,
+      name: ident.name,
+      role: ident.role,
+      typeName: ident.typeName,
+      source: ident.source,
+      teamworkFolder: ident.teamworkFolder || '',
+      teamworkDir: ident.teamworkDir || '',
+    };
+    this.knownConvMeta.set(childConversationId, meta);
+
+    if (!(quiet && this._isCoordinatorType(ident.typeName)) && activity.activelyWorking) {
+      this._spawnNonSwarmSubagent(meta, childConversationId, {
+        progressText: ident.initialBrief,
+        progressPercent: 20,
+        quiet,
+        reaction: {
+          expression: 'love',
+          motion: 'wave',
+          speech: `子代理「${ident.name}」已加入协作。`,
+        },
       });
-      this.onChange();
     }
 
     if (resolvedPath) {
-      this.childConversations.add(childConversationId);
       this.watcher.attach(childConversationId, resolvedPath, { maxInitialBytes: 262144 });
     }
   }
@@ -1046,38 +1162,43 @@ class SubagentTracker {
         continue;
       }
       if (this.retiredKeys.has(cid)) continue;
-      if (!this.convToVisualId.has(cid)) {
-        const ident = extractSubagentIdentity({
-          TypeName: entry.type,
-          Role: entry.role,
-        });
-        const id = `whale_sub_${Date.now()}_${this.seq++}`;
-        const style = this._allocateStyle(`${ident.name}_${cid}`);
-        const item = {
-          id,
-          parentConversationId,
-          childConversationId: cid,
-          transcriptPath: entry.transcriptPath || '',
-          name: ident.name,
-          role: ident.role,
-          typeName: ident.typeName,
-          source: ident.source,
-          slotIndex: this._allocateSlotIndex(),
-          scheme: style.scheme,
-          outfit: style.outfit,
-          status: 'WORKING',
-          progressText: '🚀 正在协同运行中…',
-          progressPercent: 35,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        this.items.set(id, item);
-        this.convToVisualId.set(cid, id);
-        this.onChange();
+      if (this.knownConvMeta.get(cid)?.source === 'swarm') continue;
+      const ident = extractSubagentIdentity({
+        TypeName: entry.type,
+        Role: entry.role,
+      });
+      if (isMonitorMemberName(ident.name)) continue;
+      if (this._isUtilityOnlySubagent(ident.typeName)) {
+        this.retiredKeys.add(cid);
+        continue;
       }
-      if (entry.transcriptPath) {
+      const tp = entry.transcriptPath || findTranscriptPath(cid);
+      const meta = {
+        parentConversationId,
+        transcriptPath: tp || '',
+        name: ident.name,
+        role: ident.role,
+        typeName: ident.typeName,
+        source: ident.source,
+        teamworkFolder: ident.teamworkFolder || '',
+        teamworkDir: ident.teamworkDir || '',
+      };
+      this.knownConvMeta.set(cid, meta);
+      if (!this.convToVisualId.has(cid)) {
+        this._spawnNonSwarmSubagent(meta, cid, {
+          progressText: '协同运行中',
+          progressPercent: 35,
+          quiet,
+        });
+      }
+      if (tp) {
         this.childConversations.add(cid);
-        this.watcher.attach(cid, entry.transcriptPath, { maxInitialBytes: 262144 });
+        this.watcher.attach(cid, tp, { maxInitialBytes: 262144 });
+      }
+    }
+    for (const it of Array.from(this.items.values())) {
+      if (it.source !== 'swarm' && it.source !== 'test' && it.parentConversationId === parentConversationId && it.childConversationId && !aliveIds.has(it.childConversationId)) {
+        this._finishAndRemove(it.id);
       }
     }
   }
@@ -1130,15 +1251,26 @@ class SubagentTracker {
 
     if (action === 'add') {
       const names = [];
+      const nCount = Number(args.n);
       if (Array.isArray(args.tasks) && args.tasks.length > 0) {
         for (let i = 1; i <= args.tasks.length; i++) names.push(`${baseName}-${i}`);
-      } else if (typeof args.n === 'number' && args.n > 1) {
-        for (let i = 1; i <= args.n; i++) names.push(`${baseName}-${i}`);
+      } else if (Number.isFinite(nCount) && nCount > 1) {
+        for (let i = 1; i <= nCount; i++) names.push(`${baseName}-${i}`);
       } else {
         names.push(baseName);
       }
 
-      for (const memberName of names) {
+      const validMembers = names.filter((n) => n !== 'coordinator' && !isMonitorMemberName(n));
+      if (validMembers.length === 0) return;
+
+      const now = Date.now();
+      this.lastSwarmAddAt.set(coordinatorId, now);
+      this.closedSwarms.delete(coordinatorId);
+
+      for (const memberName of validMembers) {
+        const swarmKey = `swarm:${coordinatorId}:${memberName}`;
+        this.retiredKeys.delete(swarmKey);
+        this.pendingSwarmSpawns.set(swarmKey, now);
         this._ensureSwarmMember(coordinatorId, memberName, {
           role: args.model ? `Swarm · ${args.model}` : 'Swarm Worker',
           brief: summarizePromptBrief(args.brief || '', '已加入蜂群看板，准备开工…'),
@@ -1147,8 +1279,9 @@ class SubagentTracker {
     } else if (action === 'kill') {
       const swarmKey = `swarm:${coordinatorId}:${baseName}`;
       this.retiredKeys.add(swarmKey);
+      this.pendingSwarmSpawns.delete(swarmKey);
       for (const it of Array.from(this.items.values())) {
-        if (it.swarmKey === swarmKey || (it.source === 'swarm' && it.name === baseName)) {
+        if (it.swarmKey === swarmKey || (it.source === 'swarm' && it.parentConversationId === coordinatorId && it.name === baseName)) {
           this._finishAndRemove(it.id, { permanent: true });
         }
       }
@@ -1156,14 +1289,17 @@ class SubagentTracker {
   }
 
   _ensureSwarmMember(coordinatorId, memberName, meta = {}) {
-    if (!memberName || memberName === 'coordinator') return null;
+    if (!memberName || memberName === 'coordinator' || isMonitorMemberName(memberName)) return null;
     if (this.closedSwarms.has(coordinatorId)) return null;
     const swarmKey = `swarm:${coordinatorId}:${memberName}`;
     if (this.retiredKeys.has(swarmKey)) return null;
 
     for (const existing of this.items.values()) {
       if (existing.swarmKey === swarmKey) {
-        if (meta.conversationId && !existing.childConversationId) {
+        if (meta.conversationId && existing.childConversationId !== meta.conversationId) {
+          if (existing.childConversationId) {
+            this.convToVisualId.delete(existing.childConversationId);
+          }
           existing.childConversationId = meta.conversationId;
           const tp = meta.transcriptPath || findTranscriptPath(meta.conversationId);
           existing.transcriptPath = tp;
@@ -1180,6 +1316,8 @@ class SubagentTracker {
             this.childConversations.add(meta.conversationId);
             this.watcher.attach(meta.conversationId, tp, { maxInitialBytes: 131072 });
           }
+        } else if (meta.transcriptPath && !existing.transcriptPath) {
+          existing.transcriptPath = meta.transcriptPath;
         }
         return existing;
       }
@@ -1195,14 +1333,15 @@ class SubagentTracker {
       childConversationId: meta.conversationId || null,
       transcriptPath: tp,
       name: memberName,
-      role: `🐝 ${meta.role || 'Swarm Worker'}`,
+      role: meta.role || 'Swarm 成员',
       typeName: 'swarm_worker',
       source: 'swarm',
       slotIndex: this._allocateSlotIndex(),
+      packId: style.packId,
       scheme: style.scheme,
       outfit: style.outfit,
       status: 'WORKING',
-      progressText: `🚀 ${meta.brief || '已接入蜂群消息看板…'}`,
+      progressText: meta.brief || '已接入协作看板',
       progressPercent: 24,
       stepCount: 1,
       createdAt: Date.now(),
@@ -1216,7 +1355,7 @@ class SubagentTracker {
         parentConversationId: coordinatorId,
         transcriptPath: tp,
         name: memberName,
-        rawRole: meta.role || 'Swarm Worker',
+        rawRole: meta.role || 'Swarm 成员',
         source: 'swarm',
         typeName: 'swarm_worker',
       });
@@ -1229,7 +1368,7 @@ class SubagentTracker {
     this.onReaction({
       expression: 'excited',
       motion: 'jump',
-      speech: `🐝 蜂群成员「@${memberName}」空降就位！`,
+      speech: `成员「@${memberName}」已就位。`,
     });
     this.onChange();
     return item;
@@ -1243,8 +1382,24 @@ class SubagentTracker {
     let dirty = false;
     const now = Date.now();
 
-    // A. Collect candidate root conversation IDs (watched roots + recently active Swarm folders in BRAIN_ROOTS)
+    // Prune expired pending spawn grace entries (> 60s)
+    for (const [k, ts] of this.pendingSwarmSpawns.entries()) {
+      if (now - ts >= 60000) {
+        this.pendingSwarmSpawns.delete(k);
+      }
+    }
+
+    // A. Collect candidate root conversation IDs (watched roots, tracked swarm items, pending spawns, and active BRAIN_ROOTS)
     const candidateSwarmIds = new Set(this.getWatchedRootIds?.() || []);
+    for (const it of this.items.values()) {
+      if (it.source === 'swarm' && it.parentConversationId) {
+        candidateSwarmIds.add(it.parentConversationId);
+      }
+    }
+    for (const k of this.pendingSwarmSpawns.keys()) {
+      const m = k.match(/^swarm:([^:]+):/);
+      if (m && m[1]) candidateSwarmIds.add(m[1]);
+    }
     for (const brainRoot of this.brainRoots) {
       try {
         if (!fs.existsSync(brainRoot)) continue;
@@ -1262,41 +1417,103 @@ class SubagentTracker {
     }
 
     for (const cid of candidateSwarmIds) {
-      if (!cid || this.closedSwarms.has(cid)) continue;
+      if (!cid) continue;
+      let foundMembersForCid = false;
+
       for (const brainRoot of this.brainRoots) {
         const swarmDir = path.join(brainRoot, cid, '.system_generated', 'swarm');
         const membersPath = path.join(swarmDir, 'members.json');
         if (!fs.existsSync(membersPath)) continue;
+        foundMembersForCid = true;
 
         try {
           const stat = fs.statSync(membersPath);
-          const hasTrackedFromThisSwarm = Array.from(this.items.values()).some((i) => i.parentConversationId === cid && i.source === 'swarm');
-          if (!hasTrackedFromThisSwarm && now - stat.mtimeMs > 30 * 60 * 1000) continue;
+          const hasTrackedFromThisSwarm = Array.from(this.items.values()).some(
+            (i) => i.parentConversationId === cid && i.source === 'swarm'
+          );
+          const cidPrefix = `swarm:${cid}:`;
+          let hasPendingAdd = false;
+          for (const [k, ts] of this.pendingSwarmSpawns.entries()) {
+            if (k.startsWith(cidPrefix) && now - ts < 60000) {
+              hasPendingAdd = true;
+              break;
+            }
+          }
 
-          // 1. Check `board.jsonl`: if coordinator posted `[done]`, close the entire Swarm immediately!
+          if (!hasTrackedFromThisSwarm && !hasPendingAdd && now - stat.mtimeMs > 30 * 60 * 1000) {
+            continue;
+          }
+
+          // 1. Read `members.json` FIRST so active/pending members block stale `[done]` from killing new rounds!
+          const data = JSON.parse(fs.readFileSync(membersPath, 'utf8'));
+          const members = data?.members || {};
+
+          const workingMembers = [];
+          const memberStateMap = new Map();
+          for (const [memberName, m] of Object.entries(members)) {
+            if (memberName === 'coordinator' || isMonitorMemberName(memberName) || !m || typeof m !== 'object') {
+              continue;
+            }
+            const isKilled = Boolean(
+              m.killed ||
+              String(m.phase || '').toUpperCase() === 'KILLED' ||
+              String(m.desired_state || '').toUpperCase() === 'KILLED'
+            );
+            const tp = this._resolveMemberTranscriptPath(brainRoot, m.conversation_id);
+            const isWorkingOnHost = Boolean(
+              !isKilled &&
+              String(m.phase || '').toUpperCase() === 'RUNNING' &&
+              (m.wake_mode === 'working' || this._isSwarmTranscriptBusyWithBgTask(tp))
+            );
+            memberStateMap.set(memberName, { isKilled, isWorkingOnHost, tp });
+            if (isWorkingOnHost) {
+              workingMembers.push([memberName, m]);
+            }
+          }
+
+          if (workingMembers.length > 0 || hasPendingAdd) {
+            this.closedSwarms.delete(cid);
+          }
+
+          // 2. Check `board.jsonl`: only close when `[done]` is newer than latest `swarm add` AND nobody is working/pending
           const boardPath = path.join(swarmDir, 'board.jsonl');
           const boardInfo = inspectSwarmBoard(boardPath);
-          if (boardInfo.isDone) {
+          if (
+            boardInfo.isDone &&
+            workingMembers.length === 0 &&
+            !hasPendingAdd &&
+            boardInfo.mtimeMs >= (this.lastSwarmAddAt.get(cid) || 0)
+          ) {
             this.handleSwarmCompleted(cid);
             continue;
           }
 
-          const data = JSON.parse(fs.readFileSync(membersPath, 'utf8'));
-          const members = data?.members || {};
+          if (this.closedSwarms.has(cid) && workingMembers.length === 0 && !hasPendingAdd && !hasTrackedFromThisSwarm) {
+            continue;
+          }
 
-          // 2. Fallback completion check (if coordinator finished final reply after worker posts without writing literal `[done]`):
-          // Only triggers when EVERY non-killed member (including coordinator) is resting (`wake_mode !== 'working'`),
-          // workers have already posted results on the board, and coordinator's transcript finished AFTER the last board post!
-          const hasAnyWorkingMember = Object.values(members).some(
-            (m) => m && !m.killed && String(m.phase || '').toUpperCase() === 'RUNNING' && m.wake_mode === 'working'
+          // 3. Fallback completion check (when coordinator finished without writing literal `[done]`):
+          // Only triggers when neither coordinator nor non-monitor workers are working, `!hasPendingAdd`,
+          // workers have posted on board, and coordinator's transcript finished >8s after last board post & add.
+          const isCoordinatorWorking = Boolean(
+            members.coordinator &&
+            !members.coordinator.killed &&
+            String(members.coordinator.phase || '').toUpperCase() === 'RUNNING' &&
+            (
+              members.coordinator.wake_mode === 'working' ||
+              this._isSwarmTranscriptBusyWithBgTask(
+                this._resolveMemberTranscriptPath(brainRoot, members.coordinator.conversation_id || cid)
+              )
+            )
           );
-          if (!hasAnyWorkingMember && boardInfo.hasWorkerPost) {
+          if (!isCoordinatorWorking && workingMembers.length === 0 && !hasPendingAdd && boardInfo.hasWorkerPost) {
             const coordTranscript = path.join(brainRoot, cid, '.system_generated', 'logs', 'transcript.jsonl');
             const coordAct = inspectTranscriptActivity(coordTranscript);
             if (
               coordAct.exists &&
               coordAct.finished &&
               coordAct.mtimeMs > boardInfo.mtimeMs &&
+              coordAct.mtimeMs >= (this.lastSwarmAddAt.get(cid) || 0) &&
               now - coordAct.mtimeMs > 8000
             ) {
               this.handleSwarmCompleted(cid);
@@ -1304,24 +1521,38 @@ class SubagentTracker {
             }
           }
 
-          // 3. Sync each Swarm member: `wake_mode === 'working'` -> energetic WORKING; `wake_mode !== 'working'` -> cute SLEEPING (`WAITING`)!
+          // 4. Sync each Swarm member 1:1 with authoritative `members.json` ("working -> show, done -> hide")
+          const seenMemberKeys = new Set();
           for (const [memberName, m] of Object.entries(members)) {
             if (memberName === 'coordinator' || !m || typeof m !== 'object') continue;
             const swarmKey = `swarm:${cid}:${memberName}`;
             const existing = Array.from(this.items.values()).find((x) => x.swarmKey === swarmKey);
+            const isMonitor = isMonitorMemberName(memberName);
+            const cachedState = memberStateMap.get(memberName);
+            const isKilled = cachedState ? cachedState.isKilled : Boolean(
+              m.killed ||
+              String(m.phase || '').toUpperCase() === 'KILLED' ||
+              String(m.desired_state || '').toUpperCase() === 'KILLED'
+            );
 
-            if (m.killed || String(m.phase || '').toUpperCase() === 'KILLED') {
-              this.retiredKeys.add(swarmKey);
+            if (isMonitor || isKilled) {
+              this.pendingSwarmSpawns.delete(swarmKey);
+              if (isMonitor && m.conversation_id) {
+                this.childConversations.add(m.conversation_id);
+              }
+              if (!isMonitor && isKilled) {
+                this.retiredKeys.add(swarmKey);
+              }
               if (existing) {
-                this._finishAndRemove(existing.id, { permanent: true, silent: true });
+                this._finishAndRemove(existing.id, { permanent: !isMonitor && isKilled, silent: true });
                 dirty = true;
               }
               continue;
             }
 
-            const tp = m.conversation_id
-              ? path.join(brainRoot, m.conversation_id, '.system_generated', 'logs', 'transcript.jsonl')
-              : '';
+            seenMemberKeys.add(swarmKey);
+
+            const tp = cachedState?.tp ?? this._resolveMemberTranscriptPath(brainRoot, m.conversation_id);
 
             const roleLabel = m.role || (m.model ? String(m.model).split('/').pop() : 'Worker');
             if (m.conversation_id && tp && fs.existsSync(tp)) {
@@ -1339,53 +1570,85 @@ class SubagentTracker {
               }
             }
 
-            const isWorkingOnHost =
-              String(m.phase || '').toUpperCase() === 'RUNNING' &&
-              m.wake_mode === 'working';
+            const isWorkingOnHost = Boolean(
+              cachedState
+                ? cachedState.isWorkingOnHost
+                : (
+                  String(m.phase || '').toUpperCase() === 'RUNNING' &&
+                  (m.wake_mode === 'working' || this._isSwarmTranscriptBusyWithBgTask(tp))
+                )
+            );
 
-            const item =
-              existing ||
-              this._ensureSwarmMember(cid, memberName, {
+            const latestPost = boardInfo.latestByAgent.get(memberName);
+
+            if (isWorkingOnHost) {
+              this.pendingSwarmSpawns.delete(swarmKey);
+              this.retiredKeys.delete(swarmKey);
+              if (m.conversation_id) {
+                this.retiredKeys.delete(m.conversation_id);
+              }
+
+              const item = this._ensureSwarmMember(cid, memberName, {
                 conversationId: m.conversation_id,
                 transcriptPath: tp,
                 role: roleLabel,
               });
-            if (!item) continue;
+              if (!item) continue;
 
-            const latestPost = boardInfo.latestByAgent.get(memberName);
-            if (latestPost && item.lastBoardSeq !== latestPost.seq) {
-              item.lastBoardSeq = latestPost.seq;
-              if (isWorkingOnHost) {
-                item.progressText = `📋 #${latestPost.seq}: ${latestPost.text.slice(0, 34)}`;
-              }
-              item.progressPercent = Math.min(95, Math.max(item.progressPercent || 30, 88));
-              item.updatedAt = now;
-              dirty = true;
-            }
-
-            if (isWorkingOnHost) {
-              if (item.status === 'WAITING') {
+              if (item.status === 'WAITING' || item.status === 'DONE') {
                 item.status = 'WORKING';
-                item.progressText = '🚀 已唤醒 · 正在执行任务…';
+                item.progressText = latestPost
+                  ? `#${latestPost.seq}: ${latestPost.text.slice(0, 34)}`
+                  : '已唤醒 · 执行任务中';
                 item.updatedAt = now;
                 dirty = true;
               }
-            } else if (now - item.createdAt > 3000) {
-              // Member is resting on the board (`mentions` / `anything`) -> enter sleeping state (`WAITING`)!
-              if (item.status !== 'WAITING') {
-                item.status = 'WAITING';
-                item.progressText = latestPost
-                  ? '💤 已交付汇报 · 睡眠待命中…'
-                  : '💤 休息待命中 · 等待唤醒…';
-                if (!latestPost && (item.progressPercent || 0) > 25) {
-                  item.progressPercent = 20;
-                }
+              if (latestPost && item.lastBoardSeq !== latestPost.seq) {
+                item.lastBoardSeq = latestPost.seq;
+                item.progressText = `#${latestPost.seq}: ${latestPost.text.slice(0, 34)}`;
+                item.progressPercent = Math.min(95, Math.max(item.progressPercent || 30, 88));
                 item.updatedAt = now;
                 dirty = true;
+              }
+            } else {
+              const refTs = this.pendingSwarmSpawns.get(swarmKey) || existing?.createdAt || 0;
+              if (now - refTs > 5000) {
+                this.pendingSwarmSpawns.delete(swarmKey);
+                if (existing) {
+                  this._finishAndRemove(existing.id, { permanent: false, silent: true });
+                  dirty = true;
+                }
               }
             }
           }
+
+          // 5. Prune stale swarm pets not yet in `members.json`, respecting the 60s spawn grace window (never blacklist!)
+          for (const tracked of Array.from(this.items.values())) {
+            if (tracked.parentConversationId !== cid || tracked.source !== 'swarm') continue;
+            if (!seenMemberKeys.has(tracked.swarmKey)) {
+              const pendingAt = this.pendingSwarmSpawns.get(tracked.swarmKey) || 0;
+              if (pendingAt > 0 && now - pendingAt < 60000) {
+                continue;
+              }
+              this.pendingSwarmSpawns.delete(tracked.swarmKey);
+              this._finishAndRemove(tracked.id, { permanent: false, silent: true });
+              dirty = true;
+            }
+          }
         } catch { /* ignore transient file lock */ }
+      }
+
+      if (!foundMembersForCid) {
+        for (const tracked of Array.from(this.items.values())) {
+          if (tracked.parentConversationId !== cid || tracked.source !== 'swarm') continue;
+          const pendingAt = this.pendingSwarmSpawns.get(tracked.swarmKey) || 0;
+          if (pendingAt > 0 && now - pendingAt < 60000) continue;
+          if (now - tracked.createdAt >= 60000) {
+            this.pendingSwarmSpawns.delete(tracked.swarmKey);
+            this._finishAndRemove(tracked.id, { permanent: false, silent: true });
+            dirty = true;
+          }
+        }
       }
     }
 
@@ -1452,7 +1715,7 @@ class SubagentTracker {
                 }
                 if (unchecked.length > 0 && !it.lastToolName) {
                   const currentStep = unchecked[0].replace(/^\s*-\s*\[\s\]\s*/, '').trim();
-                  it.progressText = `📋 ${currentStep.slice(0, 36)}`;
+                  it.progressText = `${currentStep.slice(0, 36)}`;
                   dirty = true;
                 }
               }
@@ -1477,4 +1740,4 @@ class SubagentTracker {
   }
 }
 
-module.exports = { SubagentTracker, extractSubagentIdentity, inspectTranscriptActivity, inspectSwarmBoard };
+module.exports = { SubagentTracker, extractSubagentIdentity, inspectTranscriptActivity, inspectSwarmBoard, isMonitorMemberName };

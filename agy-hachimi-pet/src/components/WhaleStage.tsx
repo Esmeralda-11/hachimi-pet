@@ -1,5 +1,6 @@
 import React, { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
-import type { PetReactionEvent, PetSettings, SubagentItem } from '../types';
+import { stripEmojiChars } from './StatusBubble';
+import type { PetExecutionStatus, PetPackSummary, PetReactionEvent, PetSettings, SubagentItem } from '../types';
 
 export const SCHEME_COLORS: Record<string, string> = {
   astral: '#8B7BF7',
@@ -39,6 +40,36 @@ function resolveCatgirlCombo(scheme?: string): string {
   return `${mapped}-maid`;
 }
 
+function packSignature(pack: PetPackSummary | null | undefined): string {
+  if (!pack) return '';
+  return JSON.stringify({
+    packId: pack.id ?? '',
+    type: pack.type ?? '',
+    defaultVariant: pack.defaultVariant ?? '',
+    variants: Array.isArray(pack.variants)
+      ? pack.variants.map((v) => ({
+          id: v.id ?? '',
+          assetUrl: v.assetUrl ?? v.asset ?? '',
+          thumbUrl: v.thumbUrl ?? v.thumb ?? '',
+          layout: v.layout ?? '',
+          frameWidth: v.frameWidth ?? null,
+          frameHeight: v.frameHeight ?? null,
+          cols: v.cols ?? null,
+          rows: v.rows ?? null,
+          asymmetric: Boolean(v.asymmetric),
+        }))
+      : [],
+  });
+}
+
+function toTranslucentBorderColor(color: string): string {
+  const trimmed = String(color || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return `${trimmed}99`;
+  }
+  return `color-mix(in srgb, ${trimmed || 'var(--accent)'} 60%, transparent)`;
+}
+
 export interface WhaleControllerHandle {
   triggerReaction: (ev: PetReactionEvent) => void;
   resetCornerPosition: () => void;
@@ -47,7 +78,11 @@ export interface WhaleControllerHandle {
 
 interface WhaleStageProps {
   settings: PetSettings;
+  packs?: PetPackSummary[];
+  activePack?: PetPackSummary | null;
+  status?: PetExecutionStatus;
   subagents?: SubagentItem[];
+  hidden?: boolean;
   onAnchorMove?: (pos: { x: number; y: number; sideX: number; sideY: number }) => void;
   onDiag?: (diag: Record<string, unknown>) => void;
 }
@@ -89,7 +124,7 @@ function resolveHudLayout(
   for (const sub of sorted) {
     const raw = anchors[sub.id];
     let x = Math.max(minX, Math.min(maxX, raw.x));
-    let y = raw.y - 12;
+    let y = raw.y - 4;
 
     for (const prev of placed) {
       const dx = Math.abs(x - prev.x);
@@ -151,9 +186,10 @@ function collectInteractiveRects() {
 }
 
 export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(function WhaleStage(
-  { settings, subagents = [], onAnchorMove, onDiag },
+  { settings, packs = [], activePack = null, status = 'IDLE', subagents = [], hidden, onAnchorMove, onDiag },
   ref
 ) {
+  const isHidden = Boolean(hidden ?? settings.petHidden);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const shadowRef = useRef<SVGEllipseElement | null>(null);
   const petGRef = useRef<SVGGElement | null>(null);
@@ -164,19 +200,47 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
   const sfxRef = useRef<any>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
-  const scaleRef = useRef(settings.scale);
-  scaleRef.current = settings.scale;
+  const hiddenRef = useRef(isHidden);
+  hiddenRef.current = isHidden;
+  const packsRef = useRef(packs);
+  packsRef.current = packs;
+  const activePackRef = useRef(activePack);
+  activePackRef.current = activePack;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const scaleRef = useRef(settings.mainScale ?? settings.scale ?? 0.85);
+  scaleRef.current = settings.mainScale ?? settings.scale ?? 0.85;
+  const subScaleRef = useRef(settings.subagentScale ?? 0.80);
+  subScaleRef.current = settings.subagentScale ?? 0.80;
+  const rafIdRef = useRef(0);
+  const resumeLoopRef = useRef<(() => void) | null>(null);
+  const syncAnchorsRef = useRef<(() => void) | null>(null);
+
+  const mainFigureMetaRef = useRef<{
+    packId: string;
+    type: 'whale' | 'sprite';
+    scheme: string;
+    outfit: string;
+    packSig: string;
+  }>({ packId: 'hachimi', type: 'whale', scheme: 'astral-maid', outfit: 'maid', packSig: '' });
+  const swapSeqRef = useRef(0);
+  const inFlightTargetKeyRef = useRef('');
+  const lastDiagReportRef = useRef(0);
 
   // Subagents controllers, fade-out exit queue, and anchor positions
   const subCtlsRef = useRef<
     Map<string, { ctl: any; figure: any; item: SubagentItem; lastStatus?: string; lastText?: string }>
   >(new Map());
+  const mountedRef = useRef(false);
   const spawningIdsRef = useRef<Set<string>>(new Set());
+  const spawnTimersRef = useRef<Map<string, number>>(new Map());
+  const latestSubMapRef = useRef<Map<string, SubagentItem>>(new Map());
   const exitingIdsRef = useRef<Set<string>>(new Set());
   const exitTimersRef = useRef<Map<string, number>>(new Map());
   const [renderSubs, setRenderSubs] = useState<Array<SubagentItem & { exiting?: boolean }>>([]);
   const [subAnchors, setSubAnchors] = useState<Record<string, { x: number; y: number }>>({});
-  const kitRef = useRef<{ createPet: any; createWhaleFigure: any; origin: string } | null>(null);
+  const [kitReady, setKitReady] = useState(false);
+  const kitRef = useRef<{ createPet: any; createWhaleFigure: any; createSpriteFigure: any; origin: string } | null>(null);
 
   const speechStateRef = useRef<{ text: string; idx: number; nextAt: number }>({
     text: '',
@@ -193,6 +257,13 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
     triggerReaction(ev: PetReactionEvent) {
       const ctl = ctlRef.current;
       if (!ctl) return;
+      if (hiddenRef.current) {
+        if (typeof ev.thinking === 'boolean') {
+          ctl.setThinking(ev.thinking);
+        }
+        return;
+      }
+      const isQuiet = (settingsRef.current.temperament || 'daily') === 'quiet';
       ctl.holdRoam(7);
       if (typeof ev.thinking === 'boolean') {
         ctl.setThinking(ev.thinking);
@@ -201,7 +272,11 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
         ctl.setExpr(ev.expression, 3.2);
       }
       if (ev.motion) {
-        ctl.doWord(ev.motion);
+        const isAmbientMotion =
+          ev.motion === 'hop' || ev.motion === 'jump' || ev.motion === 'nod' || ev.motion === 'look';
+        if (!(isQuiet && !ev.interactive && isAmbientMotion)) {
+          ctl.doWord(ev.motion);
+        }
       }
       if (ev.speech) {
         speechStateRef.current = { text: ev.speech, idx: 0, nextAt: 0 };
@@ -211,13 +286,15 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
       const ctl = ctlRef.current;
       if (!ctl || !stageRef.current) return;
       const r = stageRef.current.getBoundingClientRect();
+      const stageW = r.width > 0 ? r.width : window.innerWidth || 1280;
       ctl.stopWalk?.();
-      ctl.pet.x = Math.max(120, r.width - 145);
+      ctl.pet.x = Math.max(120, stageW - 145);
       ctl.pet.target = ctl.pet.x;
       ctl.pet.facing = -1;
       ctl.pet.faceVis = -1;
       ctl.setExpr('happy', 1.5);
       ctl.doWord('wave');
+      lastDiagReportRef.current = 0;
     },
     doWord(word: string) {
       const ctl = ctlRef.current;
@@ -229,9 +306,10 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
 
   // Mount Coopanion Whale figure + physics kit once
   useEffect(() => {
+    mountedRef.current = true;
     let cancelled = false;
-    let rafId = 0;
     let ro: ResizeObserver | null = null;
+    let unlockAudio: (() => void) | null = null;
 
     async function boot() {
       const stage = stageRef.current;
@@ -241,44 +319,67 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
       if (!stage || !shadowEl || !petG || !fxG) return;
 
       const origin = window.location.origin;
-      const [{ createPet }, { createSfx }, { createWhaleFigure }] = await Promise.all([
+      const [{ createPet }, { createSfx }, { createWhaleFigure }, { createSpriteFigure }] = await Promise.all([
         dynamicImport(`${origin}/coopanion/kit/body.js`),
         dynamicImport(`${origin}/coopanion/sound.js`),
         dynamicImport(`${origin}/coopanion/whale/figure.js`),
+        dynamicImport(`${origin}/coopanion/sprite-pack/figure.js`),
       ]);
       if (cancelled) return;
 
-      kitRef.current = { createPet, createWhaleFigure, origin };
+      kitRef.current = { createPet, createWhaleFigure, createSpriteFigure, origin };
 
       const sfx = createSfx({ storageKey: 'agy-whale-pet.sound', volume: 0.45 });
       sfx.set(settingsRef.current.soundOn);
       sfxRef.current = sfx;
 
-      const unlock = () => sfx.unlock();
-      window.addEventListener('pointerdown', unlock, { capture: true });
-      window.addEventListener('keydown', unlock, { capture: true });
+      unlockAudio = () => sfx.unlock();
+      window.addEventListener('pointerdown', unlockAudio, { capture: true });
+      window.addEventListener('keydown', unlockAudio, { capture: true });
 
-      const initialCombo = resolveCatgirlCombo(settingsRef.current.scheme);
-      const figure = await createWhaleFigure(new URL('/coopanion/whale/', origin), {
-        scheme: initialCombo,
-      });
+      const initPack =
+        packsRef.current?.find((p) => p.id === settingsRef.current.packId) ||
+        activePackRef.current ||
+        null;
+      const initType: 'whale' | 'sprite' = initPack?.type === 'sprite' ? 'sprite' : 'whale';
+      let figure: any;
+
+      if (initType === 'sprite' && initPack) {
+        figure = await createSpriteFigure({
+          base: origin,
+          pack: initPack,
+          scheme: settingsRef.current.scheme,
+        });
+        mainFigureMetaRef.current = {
+          packId: initPack.id,
+          type: 'sprite',
+          scheme: figure.scheme,
+          outfit: settingsRef.current.outfit,
+          packSig: packSignature(initPack),
+        };
+      } else {
+        const initialCombo = resolveCatgirlCombo(settingsRef.current.scheme);
+        figure = await createWhaleFigure(new URL('/coopanion/whale/', origin), {
+          scheme: initialCombo,
+        });
+        mainFigureMetaRef.current = {
+          packId: 'hachimi',
+          type: 'whale',
+          scheme: figure.scheme,
+          outfit: settingsRef.current.outfit,
+          packSig: packSignature(initPack),
+        };
+      }
+
       if (cancelled) {
         figure.dispose?.();
         return;
       }
       figRef.current = figure;
 
-      const latestCombo = resolveCatgirlCombo(settingsRef.current.scheme);
-      if (figure.scheme !== latestCombo) {
-        await figure.setScheme(latestCombo);
-        if (cancelled) {
-          figure.dispose?.();
-          return;
-        }
-      }
-
       const rect0 = stage.getBoundingClientRect();
-      const startX = Math.max(160, rect0.width - 155);
+      const stageW0 = rect0.width > 0 ? rect0.width : window.innerWidth || 1280;
+      const startX = Math.max(160, stageW0 - 155);
 
       const ctl = createPet(
         { petG, shadowEl, fxG },
@@ -286,15 +387,18 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
           sfx,
           figure,
           roam: settingsRef.current.roam,
+          temperament: settingsRef.current.temperament || 'daily',
           enter: 'drop',
           startX,
           bounds: () => {
             const r = stage.getBoundingClientRect();
+            const w = r.width > 0 ? r.width : window.innerWidth || 1280;
+            const h = r.height > 0 ? r.height : window.innerHeight || 720;
             return {
-              W: r.width,
-              H: r.height,
-              floorY: r.height - 14,
-              S: 0.58 * scaleRef.current,
+              W: w,
+              H: h,
+              floorY: h - 14,
+              S: 0.54 * (scaleRef.current || 0.85),
             };
           },
         }
@@ -303,27 +407,66 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
       ctl.pet.facing = -1;
       ctl.pet.faceVis = -1;
       ctl.setRoam(settingsRef.current.roam);
+      ctl.setTemperament?.(settingsRef.current.temperament || 'daily');
+      ctl.setStatus?.(statusRef.current || null);
       sfx.set(settingsRef.current.soundOn);
       ctlRef.current = ctl;
-
-      ro = new ResizeObserver(() => {
-        ctl.resize();
-        for (const entry of subCtlsRef.current.values()) {
-          entry.ctl?.resize();
-        }
-      });
-      ro.observe(stage);
+      setKitReady(true);
 
       let last = performance.now();
       let lastAnchorReport = 0;
       let lastSubAnchorReport = 0;
-      let lastDiagReport = 0;
+      lastDiagReportRef.current = 0;
+      let lastDiagMeta = { packId: '', scheme: '', subCount: -1 };
       let prevAnchor = { x: -1, y: -1, sideX: -1, sideY: -1 };
       let prevSubKeys = '';
       let prevSubPos: Record<string, { x: number; y: number }> = {};
 
+      const syncAnchorsNow = () => {
+        if (cancelled || hiddenRef.current) return;
+        const mainCtl = ctlRef.current;
+        if (mainCtl) {
+          const a = mainCtl.anchor();
+          const lay = mainCtl.layout();
+          const ax = Math.round(a.x);
+          const ay = Math.round(a.y);
+          const sx = Math.round(lay.side.x);
+          const sy = Math.round(lay.side.y);
+          prevAnchor = { x: ax, y: ay, sideX: sx, sideY: sy };
+          onAnchorMoveRef.current?.({ x: ax, y: ay, sideX: sx, sideY: sy });
+        }
+        if (subCtlsRef.current.size > 0) {
+          let nextKeys = '';
+          const nextPositions: Record<string, { x: number; y: number }> = {};
+          for (const [id, entry] of subCtlsRef.current.entries()) {
+            const anc = entry.ctl.anchor();
+            nextPositions[id] = { x: Math.round(anc.x), y: Math.round(anc.y) };
+            nextKeys += `${id}|`;
+          }
+          prevSubKeys = nextKeys;
+          prevSubPos = nextPositions;
+          setSubAnchors(nextPositions);
+        }
+      };
+      syncAnchorsRef.current = syncAnchorsNow;
+
+      ro = new ResizeObserver(() => {
+        ctl.resize();
+        if (!hiddenRef.current) ctl.render();
+        for (const entry of subCtlsRef.current.values()) {
+          entry.ctl?.resize();
+          if (!hiddenRef.current) entry.ctl?.render();
+        }
+        syncAnchorsNow();
+      });
+      ro.observe(stage);
+
       const loop = (now: number) => {
         if (cancelled) return;
+        if (hiddenRef.current) {
+          rafIdRef.current = 0;
+          return;
+        }
         const elapsedMs = now - last;
 
         // Adaptive frame pacing:
@@ -349,7 +492,7 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
         }
         const minFrameMs = isMainActive || hasActiveSub ? 18 : 40;
         if (elapsedMs < minFrameMs) {
-          rafId = requestAnimationFrame(loop);
+          rafIdRef.current = requestAnimationFrame(loop);
           return;
         }
 
@@ -409,21 +552,55 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
           setSubAnchors(nextSubAnchors);
         }
 
-        if (ctl.pet.mode !== 'air' && (lastDiagReport === 0 || now - lastDiagReport > 8000)) {
-          lastDiagReport = now;
+        const curScheme = figRef.current?.scheme || settingsRef.current.scheme;
+        const curPackId = settingsRef.current.packId || 'hachimi';
+        const curSubCount = subCtlsRef.current.size;
+        const diagChanged =
+          curScheme !== lastDiagMeta.scheme ||
+          curPackId !== lastDiagMeta.packId ||
+          curSubCount !== lastDiagMeta.subCount;
+
+        if (
+          ctl.pet.mode !== 'air' &&
+          (lastDiagReportRef.current === 0 || diagChanged || now - lastDiagReportRef.current > 2000)
+        ) {
+          lastDiagReportRef.current = now;
+          lastDiagMeta = { packId: curPackId, scheme: curScheme, subCount: curSubCount };
           const cv = petG.querySelector('canvas');
+          const svgImg = petG.querySelector('image');
           const lay = ctl.layout();
           const hitSummary = collectInteractiveRects();
           onDiagRef.current?.({
             loaded: true,
-            scheme: figure.scheme,
+            hidden: false,
+            packId: curPackId,
+            scheme: curScheme,
+            temperament: settingsRef.current.temperament || 'daily',
+            mainScale: scaleRef.current,
+            subagentScale: subScaleRef.current,
             mode: ctl.pet.mode,
             x: Math.round(ctl.pet.x),
             fy: Math.round(ctl.pet.fy),
             box: lay.box,
-            canvasW: cv?.width ?? 0,
-            canvasH: cv?.height ?? 0,
-            subagentCount: subCtlsRef.current.size,
+            bubbleAnchor: {
+              x: Math.round(lay.bubble.x),
+              y: Math.round(lay.bubble.y),
+            },
+            canvasW: cv?.width ?? (svgImg ? 256 : 0),
+            canvasH: cv?.height ?? (svgImg ? 256 : 0),
+            subagentCount: curSubCount,
+            subagentBoxes: Array.from(subCtlsRef.current.entries()).map(([sid, ent]) => {
+              const subLay = ent.ctl.layout();
+              return {
+                id: sid,
+                scheme: ent.item.scheme,
+                box: subLay.box,
+                bubbleAnchor: {
+                  x: Math.round(subLay.bubble.x),
+                  y: Math.round(subLay.bubble.y),
+                },
+              };
+            }),
             interactiveRects: hitSummary.validRects,
             skippedOversizedRects: hitSummary.skippedOversized,
           });
@@ -448,9 +625,33 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
           }
         }
 
-        rafId = requestAnimationFrame(loop);
+        rafIdRef.current = requestAnimationFrame(loop);
       };
-      rafId = requestAnimationFrame(loop);
+
+      const scheduleLoop = () => {
+        if (cancelled || hiddenRef.current || rafIdRef.current) return;
+        last = performance.now();
+        rafIdRef.current = requestAnimationFrame(loop);
+      };
+      resumeLoopRef.current = scheduleLoop;
+      if (!hiddenRef.current) {
+        ctl.render();
+        syncAnchorsNow();
+        rafIdRef.current = requestAnimationFrame(loop);
+      } else {
+        onDiagRef.current?.({
+          loaded: true,
+          hidden: true,
+          packId: settingsRef.current.packId || 'hachimi',
+          scheme: figRef.current?.scheme || settingsRef.current.scheme,
+          temperament: settingsRef.current.temperament || 'daily',
+          mainScale: scaleRef.current,
+          subagentScale: subScaleRef.current,
+          subagentCount: subCtlsRef.current.size,
+          interactiveRects: [],
+          skippedOversizedRects: 0,
+        });
+      }
     }
 
     boot().catch((err) => {
@@ -459,11 +660,27 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
     });
 
     return () => {
+      mountedRef.current = false;
       cancelled = true;
-      cancelAnimationFrame(rafId);
+      if (unlockAudio) {
+        window.removeEventListener('pointerdown', unlockAudio, { capture: true });
+        window.removeEventListener('keydown', unlockAudio, { capture: true });
+        unlockAudio = null;
+      }
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = 0;
+      }
+      resumeLoopRef.current = null;
+      syncAnchorsRef.current = null;
       ro?.disconnect();
       figRef.current?.dispose?.();
       ctlRef.current = null;
+      inFlightTargetKeyRef.current = '';
+      for (const t of spawnTimersRef.current.values()) {
+        window.clearTimeout(t);
+      }
+      spawnTimersRef.current.clear();
       for (const t of exitTimersRef.current.values()) {
         window.clearTimeout(t);
       }
@@ -484,6 +701,15 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
     const stage = stageRef.current;
     const currentMap = subCtlsRef.current;
     const activeMap = new Map(subagents.map((s) => [s.id, s]));
+    latestSubMapRef.current = activeMap;
+
+    for (const [sid, tid] of spawnTimersRef.current.entries()) {
+      if (!activeMap.has(sid)) {
+        window.clearTimeout(tid);
+        spawnTimersRef.current.delete(sid);
+        spawningIdsRef.current.delete(sid);
+      }
+    }
 
     // Update renderSubs: keep active subagents, and transition newly removed ones into 480ms smooth fade-out!
     setRenderSubs((prev) => {
@@ -517,6 +743,13 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
             const ent = subCtlsRef.current.get(oldItem.id);
             ent?.figure?.dispose?.();
             subCtlsRef.current.delete(oldItem.id);
+            lastDiagReportRef.current = 0;
+            setSubAnchors((cur) => {
+              if (!(oldItem.id in cur)) return cur;
+              const copy = { ...cur };
+              delete copy[oldItem.id];
+              return copy;
+            });
             setRenderSubs((cur) => cur.filter((x) => x.id !== oldItem.id));
           }, 480);
           exitTimersRef.current.set(oldItem.id, tid);
@@ -537,6 +770,7 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
         entry.item = sub;
         if (entry.lastStatus !== sub.status) {
           entry.lastStatus = sub.status;
+          entry.ctl?.setStatus?.(sub.status || null);
           if (sub.status === 'DONE') {
             if (entry.ctl?.pet?.mode === 'sleep') entry.ctl?.doWord?.('stand');
             entry.ctl?.setThinking?.(false);
@@ -571,120 +805,378 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
 
       // Stagger simultaneous sky-drops slightly (95ms apart) so parallel Swarm/Teamwork waves look super lively!
       const dropDelayMs = 45 + (index % 6) * 95;
-      setTimeout(async () => {
-        if (!kitRef.current || !stageRef.current || exitingIdsRef.current.has(sub.id)) {
-          spawningIdsRef.current.delete(sub.id);
-          return;
-        }
-        const shadowEl = document.getElementById(`sub-shadow-${sub.id}`) as any;
-        const petG = document.getElementById(`sub-pet-${sub.id}`) as any;
-        const fxG = document.getElementById(`sub-fx-${sub.id}`) as any;
-        if (!shadowEl || !petG || !fxG) {
-          spawningIdsRef.current.delete(sub.id);
-          return;
-        }
-
-        try {
-          const combo = resolveCatgirlCombo(sub.scheme);
-          const figure = await kit.createWhaleFigure(new URL('/coopanion/whale/', kit.origin), {
-            scheme: combo,
-          });
-          if (exitingIdsRef.current.has(sub.id)) {
-            figure.dispose?.();
+      const scheduleSpawn = (attempt: number, delayMs: number) => {
+        const tid = window.setTimeout(async () => {
+          spawnTimersRef.current.delete(sub.id);
+          if (
+            !mountedRef.current ||
+            !kitRef.current ||
+            !stageRef.current ||
+            exitingIdsRef.current.has(sub.id) ||
+            currentMap.has(sub.id)
+          ) {
+            spawningIdsRef.current.delete(sub.id);
             return;
           }
-          const stageW = stage.getBoundingClientRect().width || window.innerWidth;
-          const laneIdx = typeof sub.slotIndex === 'number' ? sub.slotIndex : index;
-          const startX = computeSubagentLaneX(laneIdx, stageW);
 
-          const subCtl = kit.createPet(
-            { petG, shadowEl, fxG },
-            {
-              sfx: sfxRef.current,
-              figure,
-              roam: 'off',
-              enter: 'drop', // Physical sky-drop with gravity & squash-bounce
-              startX,
-              bounds: () => {
-                const r = stage.getBoundingClientRect();
-                return {
-                  W: r.width,
-                  H: r.height,
-                  floorY: r.height - 14,
-                  S: 0.47 * scaleRef.current,
-                };
-              },
+          const shadowEl = document.getElementById(`sub-shadow-${sub.id}`) as any;
+          const petG = document.getElementById(`sub-pet-${sub.id}`) as any;
+          const fxG = document.getElementById(`sub-fx-${sub.id}`) as any;
+          if (!shadowEl || !petG || !fxG) {
+            // React commit can lag slightly behind `setRenderSubs`; poll briefly before giving up.
+            if (attempt < 12) {
+              scheduleSpawn(attempt + 1, 50);
+              return;
             }
-          );
-          subCtl.pet.x = startX;
-          subCtl.pet.facing = -1;
-          subCtl.pet.faceVis = -1;
-          subCtl.setExpr('determined', 2.8);
-          currentMap.set(sub.id, {
-            ctl: subCtl,
-            figure,
-            item: sub,
-            lastStatus: sub.status,
-            lastText: sub.progressText,
-          });
-        } catch (e) {
-          console.error('[WhaleStage] Failed to spawn subagent pet:', e);
-        } finally {
-          spawningIdsRef.current.delete(sub.id);
-        }
-      }, dropDelayMs);
+            spawningIdsRef.current.delete(sub.id);
+            return;
+          }
+
+          try {
+            const activeKit = kitRef.current;
+            const activeStage = stageRef.current;
+            if (!activeKit || !activeStage) return;
+
+            const latestSub = latestSubMapRef.current.get(sub.id) || sub;
+            const subPackId = latestSub.packId || settingsRef.current.packId || 'hachimi';
+            const subPack =
+              packsRef.current?.find((p) => p.id === subPackId) ||
+              (activePackRef.current?.id === subPackId ? activePackRef.current : null);
+            let figure: any;
+
+            if (subPack?.type === 'sprite') {
+              figure = await activeKit.createSpriteFigure({
+                base: activeKit.origin,
+                pack: subPack,
+                scheme: latestSub.scheme,
+              });
+            } else {
+              const combo = resolveCatgirlCombo(latestSub.scheme);
+              figure = await activeKit.createWhaleFigure(new URL('/coopanion/whale/', activeKit.origin), {
+                scheme: combo,
+              });
+            }
+
+            if (
+              !mountedRef.current ||
+              exitingIdsRef.current.has(sub.id) ||
+              !latestSubMapRef.current.has(sub.id) ||
+              !petG.isConnected
+            ) {
+              figure.dispose?.();
+              return;
+            }
+
+            const finalSub = latestSubMapRef.current.get(sub.id) || latestSub;
+            const stageW = activeStage.getBoundingClientRect().width || window.innerWidth;
+            const laneIdx = typeof finalSub.slotIndex === 'number' ? finalSub.slotIndex : index;
+            const startX = computeSubagentLaneX(laneIdx, stageW);
+
+            const subCtl = activeKit.createPet(
+              { petG, shadowEl, fxG },
+              {
+                sfx: sfxRef.current,
+                figure,
+                roam: 'off',
+                temperament: 'quiet',
+                enter: 'drop', // Physical sky-drop with gravity & squash-bounce
+                startX,
+                bounds: () => {
+                  const r = activeStage.getBoundingClientRect();
+                  const w = r.width > 0 ? r.width : window.innerWidth || 1280;
+                  const h = r.height > 0 ? r.height : window.innerHeight || 720;
+                  return {
+                    W: w,
+                    H: h,
+                    floorY: h - 14,
+                    S: 0.46 * (subScaleRef.current || 0.80),
+                  };
+                },
+              }
+            );
+            subCtl.pet.x = startX;
+            subCtl.pet.facing = -1;
+            subCtl.pet.faceVis = -1;
+            subCtl.setStatus?.(finalSub.status || null);
+            if (finalSub.status === 'THINKING') {
+              subCtl.setThinking?.(true);
+            }
+            subCtl.setExpr('determined', 2.8);
+            currentMap.set(sub.id, {
+              ctl: subCtl,
+              figure,
+              item: finalSub,
+              lastStatus: finalSub.status,
+              lastText: finalSub.progressText,
+            });
+            if (!hiddenRef.current) {
+              subCtl.render();
+              syncAnchorsRef.current?.();
+            }
+            lastDiagReportRef.current = 0;
+          } catch (e) {
+            console.error('[WhaleStage] Failed to spawn subagent pet:', e);
+          } finally {
+            spawningIdsRef.current.delete(sub.id);
+          }
+        }, delayMs);
+        spawnTimersRef.current.set(sub.id, tid);
+      };
+
+      scheduleSpawn(0, dropDelayMs);
     });
-  }, [subagents]);
+  }, [subagents, kitReady]);
 
-  // Sync color scheme live for main pet
+  // Sync main pet status into kit frame
   useEffect(() => {
-    const fig = figRef.current;
-    const ctl = ctlRef.current;
-    if (!fig) return;
-    const combo = resolveCatgirlCombo(settings.scheme);
-    if (fig.scheme !== combo) {
-      fig.setScheme(combo, { fade: 0.42 }).then(() => {
-        if (ctl) {
-          ctl.pet.sqv += 1.1;
-          ctl.setExpr('happy', 1.1);
-        }
-      });
-    }
-  }, [settings.scheme, settings.outfit]);
+    ctlRef.current?.setStatus?.(status || null);
+  }, [status]);
 
-  // Sync roam, scale, and sound settings
+  // Hot-swap between Whale Maid and Sprite-Pack figures + sync color scheme/variant live
+  useEffect(() => {
+    const ctl = ctlRef.current;
+    const fig = figRef.current;
+    const kit = kitRef.current;
+    if (!ctl || !fig || !kit) return;
+
+    const targetPack = packs?.find((p) => p.id === settings.packId) || activePack || null;
+    const targetType: 'whale' | 'sprite' = targetPack?.type === 'sprite' ? 'sprite' : 'whale';
+    const targetPackId = targetPack?.id || settings.packId || 'hachimi';
+    const targetPackSig = packSignature(targetPack);
+    const meta = mainFigureMetaRef.current;
+
+    const targetWhaleCombo = targetType === 'whale' ? resolveCatgirlCombo(settings.scheme) : '';
+    const targetSpriteVariantId =
+      targetType === 'sprite' && targetPack
+        ? targetPack.variants?.find((v) => v.id === settings.scheme)?.id ||
+          targetPack.variants?.find((v) => v.id === targetPack.defaultVariant)?.id ||
+          targetPack.variants?.[0]?.id ||
+          settings.scheme
+        : '';
+    const targetKey = `${targetType}|${targetPackId}|${targetPackSig}|${
+      targetType === 'whale' ? targetWhaleCombo : targetSpriteVariantId
+    }`;
+
+    if (inFlightTargetKeyRef.current && inFlightTargetKeyRef.current === targetKey) {
+      return;
+    }
+    const isInterruptingInFlight = Boolean(inFlightTargetKeyRef.current);
+
+    const needsTypeSwap = targetType !== meta.type;
+    const needsWhaleSchemeSwap =
+      !needsTypeSwap && targetType === 'whale' && (fig.scheme !== targetWhaleCombo || isInterruptingInFlight);
+    const needsSpritePackSwap =
+      !needsTypeSwap &&
+      targetType === 'sprite' &&
+      Boolean(targetPack) &&
+      (targetPackId !== meta.packId || targetPackSig !== meta.packSig || isInterruptingInFlight);
+    const needsSpriteSchemeSwap =
+      !needsTypeSwap &&
+      !needsSpritePackSwap &&
+      targetType === 'sprite' &&
+      Boolean(targetPack) &&
+      fig.scheme !== targetSpriteVariantId;
+
+    if (!needsTypeSwap && !needsWhaleSchemeSwap && !needsSpritePackSwap && !needsSpriteSchemeSwap) {
+      return;
+    }
+
+    const seq = ++swapSeqRef.current;
+    inFlightTargetKeyRef.current = targetKey;
+
+    (async () => {
+      try {
+        if (needsTypeSwap) {
+          const nextFig =
+            targetType === 'sprite' && targetPack
+              ? await kit.createSpriteFigure({
+                  base: kit.origin,
+                  pack: targetPack,
+                  scheme: settings.scheme,
+                })
+              : await kit.createWhaleFigure(new URL('/coopanion/whale/', kit.origin), {
+                  scheme: targetWhaleCombo,
+                });
+
+          if (seq !== swapSeqRef.current || !ctlRef.current) {
+            nextFig.dispose?.();
+            return;
+          }
+
+          ctlRef.current.setFigure(nextFig);
+          ctlRef.current.setStatus?.(statusRef.current || null);
+          figRef.current = nextFig;
+          mainFigureMetaRef.current = {
+            packId: targetPackId,
+            type: targetType,
+            scheme: nextFig.scheme,
+            outfit: settings.outfit,
+            packSig: targetPackSig,
+          };
+          ctlRef.current.pet.sqv += 1.1;
+          ctlRef.current.setExpr('happy', 1.1);
+          if (!hiddenRef.current) {
+            ctlRef.current.render?.();
+            syncAnchorsRef.current?.();
+          }
+          lastDiagReportRef.current = 0;
+          return;
+        }
+
+        if (needsWhaleSchemeSwap) {
+          await figRef.current.setScheme(targetWhaleCombo, { fade: 0.42 });
+          if (seq !== swapSeqRef.current || !ctlRef.current) return;
+          mainFigureMetaRef.current = {
+            ...meta,
+            packId: targetPackId,
+            scheme: targetWhaleCombo,
+            packSig: targetPackSig,
+          };
+          ctlRef.current.pet.sqv += 1.1;
+          ctlRef.current.setExpr('happy', 1.1);
+          if (!hiddenRef.current) {
+            ctlRef.current.render?.();
+            syncAnchorsRef.current?.();
+          }
+          lastDiagReportRef.current = 0;
+          return;
+        }
+
+        if (targetType === 'sprite' && targetPack) {
+          if (needsSpritePackSwap) {
+            await figRef.current.setPack(targetPack, settings.scheme);
+            if (seq !== swapSeqRef.current || !ctlRef.current) return;
+            mainFigureMetaRef.current = {
+              ...meta,
+              packId: targetPackId,
+              scheme: figRef.current.scheme,
+              packSig: targetPackSig,
+            };
+            ctlRef.current.pet.sqv += 1.1;
+            ctlRef.current.setExpr('happy', 1.1);
+            if (!hiddenRef.current) {
+              ctlRef.current.render?.();
+              syncAnchorsRef.current?.();
+            }
+            lastDiagReportRef.current = 0;
+          } else if (needsSpriteSchemeSwap) {
+            await figRef.current.setScheme(settings.scheme);
+            if (seq !== swapSeqRef.current || !ctlRef.current) return;
+            mainFigureMetaRef.current = {
+              ...meta,
+              scheme: figRef.current.scheme,
+              packSig: targetPackSig,
+            };
+            ctlRef.current.pet.sqv += 1.1;
+            ctlRef.current.setExpr('happy', 1.1);
+            if (!hiddenRef.current) {
+              ctlRef.current.render?.();
+              syncAnchorsRef.current?.();
+            }
+            lastDiagReportRef.current = 0;
+          }
+        }
+      } catch (err) {
+        console.error('[WhaleStage] Failed to hot-swap figure:', err);
+      } finally {
+        if (seq === swapSeqRef.current) {
+          inFlightTargetKeyRef.current = '';
+        }
+      }
+    })();
+  }, [settings.packId, settings.scheme, settings.outfit, activePack, packs, kitReady]);
+
+  // Sync roam, temperament, independent scales, sound, and hidden state
   useEffect(() => {
     ctlRef.current?.setRoam(settings.roam);
   }, [settings.roam]);
 
   useEffect(() => {
+    ctlRef.current?.setTemperament?.(settings.temperament || 'daily');
+  }, [settings.temperament]);
+
+  useEffect(() => {
     ctlRef.current?.resize();
+    if (!hiddenRef.current) {
+      ctlRef.current?.render?.();
+    }
     for (const entry of subCtlsRef.current.values()) {
       entry.ctl?.resize();
+      if (!hiddenRef.current) {
+        entry.ctl?.render?.();
+      }
     }
-  }, [settings.scale]);
+    syncAnchorsRef.current?.();
+    lastDiagReportRef.current = 0;
+  }, [settings.mainScale, settings.subagentScale, settings.scale]);
+
+  useEffect(() => {
+    lastDiagReportRef.current = 0;
+  }, [settings.showSubagentHud]);
 
   useEffect(() => {
     sfxRef.current?.set(settings.soundOn);
   }, [settings.soundOn]);
 
+  useEffect(() => {
+    if (isHidden) {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = 0;
+      }
+      window.petHost?.setMouseCapture(false);
+      onDiagRef.current?.({
+        loaded: Boolean(figRef.current),
+        hidden: true,
+        packId: settingsRef.current.packId || 'hachimi',
+        scheme: figRef.current?.scheme || settingsRef.current.scheme,
+        temperament: settingsRef.current.temperament || 'daily',
+        mainScale: scaleRef.current,
+        subagentScale: subScaleRef.current,
+        subagentCount: subCtlsRef.current.size,
+        interactiveRects: [],
+        skippedOversizedRects: 0,
+      });
+    } else {
+      ctlRef.current?.resize();
+      ctlRef.current?.render?.();
+      for (const entry of subCtlsRef.current.values()) {
+        entry.ctl?.resize();
+        entry.ctl?.render?.();
+      }
+      syncAnchorsRef.current?.();
+      lastDiagReportRef.current = 0;
+      resumeLoopRef.current?.();
+    }
+  }, [isHidden, kitReady]);
+
   // Windows click-through cursor polling hit-test integration (with anti-masking circuit breaker)
   useEffect(() => {
     if (!window.petHost) return;
     return window.petHost.onCursor((pt) => {
-      if (pt.locked || !pt.insideWindow) {
+      if (hiddenRef.current) {
         window.petHost?.setMouseCapture(false);
         return;
       }
       const ctl = ctlRef.current;
+      const stageRect = stageRef.current?.getBoundingClientRect();
+      const localPt = stageRect
+        ? { ...pt, x: pt.x - stageRect.left, y: pt.y - stageRect.top }
+        : pt;
+      ctl?.hostCursorMove?.(localPt);
+
+      if (pt.locked || !pt.insideWindow) {
+        window.petHost?.setMouseCapture(false);
+        return;
+      }
       let overWhale = false;
       if (ctl) {
-        overWhale = !!(ctl.pressing || ctl.hitPet({ x: pt.x, y: pt.y }));
+        overWhale = !!(ctl.pressing || ctl.hitPet({ x: localPt.x, y: localPt.y }));
       }
       if (!overWhale) {
         for (const [id, entry] of subCtlsRef.current.entries()) {
           if (exitingIdsRef.current.has(id)) continue;
-          if (entry.ctl?.pressing || entry.ctl?.hitPet({ x: pt.x, y: pt.y })) {
+          if (entry.ctl?.pressing || entry.ctl?.hitPet({ x: localPt.x, y: localPt.y })) {
             overWhale = true;
             break;
           }
@@ -739,6 +1231,7 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
     <div
       ref={stageRef}
       className="whale-stage"
+      style={isHidden ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
       onPointerDown={(e) => {
         if (e.button === 2) {
           const ptR = toStagePoint(e);
@@ -815,10 +1308,11 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
         const pt = toStagePoint(e);
         if (ctlRef.current?.hitPet(pt)) {
           e.preventDefault();
+          window.petHost?.showContextMenu?.();
         }
       }}
     >
-      <svg className="whale-svg" aria-hidden="true">
+      <svg className="whale-svg" aria-hidden="true" style={isHidden ? { display: 'none' } : undefined}>
         {/* Main Pet Figures */}
         <ellipse ref={shadowRef} className="shadow" cx="0" cy="0" rx="0" ry="0" />
         <g ref={petGRef} />
@@ -835,11 +1329,14 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
       </svg>
 
       {/* Dynamic Subagents Overhead HUD Layer — strictly click-through on container, interactive ONLY on active compact pills! */}
-      <div className="subagents-hud-layer">
+      {!isHidden && settings.showSubagentHud !== false && (
+        <div className="subagents-hud-layer">
         {renderSubs.map((sub) => {
           const pos = hudPositions[sub.id];
           if (!pos) return null;
-          const schemeColor = SCHEME_COLORS[sub.scheme] || 'var(--accent)';
+          const subPack = packs?.find((p) => p.id === (sub.packId || settings.packId)) || activePack;
+          const varColor = subPack?.variants?.find((v) => v.id === sub.scheme)?.color;
+          const schemeColor = varColor || SCHEME_COLORS[sub.scheme] || 'var(--accent)';
           const pct = sub.exiting
             ? 100
             : typeof sub.progressPercent === 'number'
@@ -851,13 +1348,16 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
               ? 'rgba(52, 211, 153, 0.7)'
               : isSleeping
               ? 'rgba(129, 140, 248, 0.55)'
-              : `${schemeColor}99`;
+              : toTranslucentBorderColor(schemeColor);
           const barColor =
             sub.status === 'DONE'
               ? 'var(--emerald)'
               : isSleeping
               ? '#818cf8'
               : schemeColor;
+          const cleanName = stripEmojiChars(sub.name, '子代理');
+          const cleanRole = stripEmojiChars(sub.role, '协作中');
+          const cleanProgress = stripEmojiChars(sub.progressText, '处理中');
           return (
             <div
               key={sub.id}
@@ -879,19 +1379,19 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
                         }
                       }
                 }
-                title={`${sub.name} (${sub.role}) · ${sub.progressText}`}
+                title={`${cleanName} (${cleanRole}) · ${cleanProgress}`}
               >
                 <div className="subagent-hud-top">
                   <span
                     className={`subagent-status-indicator ${sub.status.toLowerCase()}`}
                     style={{ backgroundColor: barColor }}
                   />
-                  <span className="subagent-name-tag">{sub.name}</span>
-                  <span className="subagent-role-tag">{isSleeping ? '💤 休眠' : sub.role}</span>
+                  <span className="subagent-name-tag">{cleanName}</span>
+                  <span className="subagent-role-tag">{isSleeping ? '休眠' : cleanRole}</span>
                 </div>
                 <div className="subagent-progress-row">
                   <div className="subagent-progress-meta">
-                    <span className="subagent-progress-text">{sub.progressText}</span>
+                    <span className="subagent-progress-text">{cleanProgress}</span>
                     {pct !== null && <span className="subagent-pct-label">{pct}%</span>}
                   </div>
                   {pct !== null && (
@@ -910,7 +1410,8 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 });

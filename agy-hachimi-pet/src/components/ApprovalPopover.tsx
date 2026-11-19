@@ -1,5 +1,6 @@
 import React from 'react';
 import { ShieldAlert, Check, X } from 'lucide-react';
+import { stripEmojiChars } from './StatusBubble';
 import type { PendingApproval } from '../types';
 
 interface ApprovalPopoverProps {
@@ -9,6 +10,7 @@ interface ApprovalPopoverProps {
 
 export const ApprovalPopover: React.FC<ApprovalPopoverProps> = ({ approval, onResolve }) => {
   if (!approval) return null;
+  const cleanSummary = approval.summary ? stripEmojiChars(approval.summary) : '';
 
   return (
     <div className="approval-popover" data-pet-interactive="true">
@@ -16,7 +18,7 @@ export const ApprovalPopover: React.FC<ApprovalPopoverProps> = ({ approval, onRe
         <ShieldAlert size={16} className="approval-icon" />
         <span>终端命令执行确认</span>
       </div>
-      {approval.summary && <div className="approval-summary">{approval.summary}</div>}
+      {cleanSummary && <div className="approval-summary">{cleanSummary}</div>}
       <pre className="approval-cmd">{approval.commandLine}</pre>
       <div className="approval-actions">
         <button

@@ -13,6 +13,30 @@
 
 ---
 
+> [!NOTE]
+> **Fork 与致谢说明**：本仓库（[Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)）是基于原作者 **[hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)**（`v1.0.0`）的个人定制派生版（Fork）。感谢原作者在桌宠框架、多智能体状态同步与插件架构上的设计及实现。本仓库遵循与上游一致的 **GNU Affero General Public License v3.0 or later（`AGPL-3.0-or-later`）** 开源协议，完整保留原有许可证（[`LICENSE`](./LICENSE)）与第三方声明（[`hachimi-pet/THIRD_PARTY_NOTICES.md`](./hachimi-pet/THIRD_PARTY_NOTICES.md)）。
+>
+> - **原版上游仓库**：[https://github.com/hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)
+> - **本定制 Fork 仓库**：[https://github.com/Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)
+
+---
+
+## ✨ 本 Fork 主要增强与改动
+
+在原版 `v1.0.0` 基础上，本派生分支补充了以下定制功能与修复：
+
+- **自定义角色包与本地设置工坊（本地工坊页面 `/workshop`）**：支持本地自定义精灵图集导入、多角度/分面图片导入与自动抠图切帧、逐帧检视预览，以及极简亮暗双模与多主题色系设置页。
+- **子代理与蜂群精确联动修复**：修正桌面子代理数量与实际运行中子代理/蜂群成员的对应关系，任务结束后干净退场。
+- **状态栏与桌面交互优化**：5 段式状态栏菜单重排，新增「关闭状态栏」与右键桌面宠物呼出完整菜单恢复；支持主宠与子代理独立大中小尺寸调节、性格模式（活泼 / 日常 / 内敛）及头顶 4 项提示独立开关，并优化 macOS 状态栏图标居中与留白效果。
+
+### 适用范围与不含内容
+
+- **适用平台**：本分支新增的托盘菜单、右键菜单与本地工坊功能主要在 **macOS（Electron 运行时）** 下测试迭代；Windows 原生 WebView2 轻壳（源码目录 `shell-win32`）暂未同步新增托盘项，Windows 用户如需原版体验请直接参考上游仓库 [hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)。
+- **不含私有素材**：本仓库**不包含任何个人私有宠物素材包**，默认随插件附带上游原版哈基米形象；自定义角色包存放在用户本地角色包目录 `~/.hachimi-pet/packs/` 下。
+- **可选 Python 依赖**：若需使用本地设置工坊（`/workshop`）的「智能导入 / 分面多图切帧」功能，需本机 Python 已安装图像处理依赖 `pillow`、`numpy`、`scipy`（安装命令 `pip install pillow numpy scipy`），macOS 14+ 会自动优先调用系统 Apple Vision 抠图；仅使用内置形象或已打包图集无需上述 Python 依赖。
+
+---
+
 ## 📁 仓库结构 · Repository Structure
 
 本仓库包含**可直接安装的便携插件包**与**完整可编译源代码**：
@@ -26,9 +50,11 @@
 
 ## 🚀 快速安装（插件本体）
 
+以下命令拉取的是本定制 Fork 仓库（[Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)）；如需安装原版，请将克隆地址替换为上游仓库 [hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)。
+
 ### 方式一：通过 Antigravity CLI 安装（推荐）
 ```bash
-git clone https://github.com/hwt675217/hachimi-pet.git
+git clone https://github.com/Esmeralda-11/hachimi-pet.git
 cd hachimi-pet
 agy plugin validate ./hachimi-pet --strict
 agy plugin install ./hachimi-pet
@@ -38,13 +64,13 @@ agy plugin install ./hachimi-pet
 
 **Windows (PowerShell):**
 ```powershell
-git clone https://github.com/hwt675217/hachimi-pet.git "$env:TEMP\hachimi-pet-repo"
+git clone https://github.com/Esmeralda-11/hachimi-pet.git "$env:TEMP\hachimi-pet-repo"
 Copy-Item -Recurse -Force "$env:TEMP\hachimi-pet-repo\hachimi-pet" "$HOME\.gemini\config\plugins\hachimi-pet"
 ```
 
 **macOS / Linux:**
 ```bash
-git clone https://github.com/hwt675217/hachimi-pet.git /tmp/hachimi-pet-repo
+git clone https://github.com/Esmeralda-11/hachimi-pet.git /tmp/hachimi-pet-repo
 mkdir -p ~/.gemini/config/plugins
 cp -R /tmp/hachimi-pet-repo/hachimi-pet ~/.gemini/config/plugins/hachimi-pet
 ```
@@ -68,6 +94,7 @@ Windows 原生 WebView2 轻壳源码位于 [`agy-hachimi-pet/shell-win32/Hachimi
 
 ---
 
-## 📄 开源协议 · License
+## 📄 开源协议与致谢 · License & Attribution
 
 - 本项目遵循 **GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)**，详见 [`LICENSE`](./LICENSE) 与 [`hachimi-pet/THIRD_PARTY_NOTICES.md`](./hachimi-pet/THIRD_PARTY_NOTICES.md)。
+- 上游原版项目为 **[hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)**（`v1.0.0`），本仓库（[Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)）为其个人定制派生版，完整延续原版开源协议与第三方版权声明。

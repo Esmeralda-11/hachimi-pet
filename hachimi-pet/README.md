@@ -11,6 +11,11 @@
   </p>
 </div>
 
+> [!NOTE]
+> **Fork 来源与致谢**：本插件包来自个人定制派生仓库 [Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)，派生并致谢原作者 **[hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)**（`v1.0.0`），延续上游 **GNU Affero General Public License v3.0 or later（`AGPL-3.0-or-later`）** 开源协议并保留全部原有许可与第三方声明。
+>
+> 在原版基础上，本 Fork 新增本地角色工坊（本地工坊页面 `/workshop`）、状态栏可关闭与右键桌宠呼出完整菜单恢复，以及子代理与蜂群精确联动修复；新增功能主要在 **macOS（Electron 运行时）** 下测试验证，且不包含个人私有素材包（自定义角色包存放于本地目录 `~/.hachimi-pet/packs/`）。
+
 ---
 
 ## ✨ 特性亮点 · Highlights
@@ -35,17 +40,17 @@
 
 ### 方式一：本地安装为全局 Antigravity 插件
 
-将本仓库目录（`hachimi-pet`）复制或链接到 Antigravity 全局插件目录即可生效：
+将本仓库目录（`hachimi-pet`）复制或链接到 Antigravity 全局插件目录即可生效（以下命令拉取本定制 Fork [Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)；如需安装原版请将克隆地址替换为上游仓库 [hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)）：
 
 **Windows (PowerShell):**
 ```powershell
-git clone https://github.com/hwt675217/hachimi-pet.git "$env:TEMP\hachimi-pet-repo"
+git clone https://github.com/Esmeralda-11/hachimi-pet.git "$env:TEMP\hachimi-pet-repo"
 Copy-Item -Recurse -Force "$env:TEMP\hachimi-pet-repo\hachimi-pet" "$HOME\.gemini\config\plugins\hachimi-pet"
 ```
 
 **macOS / Linux:**
 ```bash
-git clone https://github.com/hwt675217/hachimi-pet.git /tmp/hachimi-pet-repo
+git clone https://github.com/Esmeralda-11/hachimi-pet.git /tmp/hachimi-pet-repo
 mkdir -p ~/.gemini/config/plugins
 cp -R /tmp/hachimi-pet-repo/hachimi-pet ~/.gemini/config/plugins/hachimi-pet
 ```

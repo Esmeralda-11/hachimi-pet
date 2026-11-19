@@ -14,6 +14,11 @@ function fallbackResponse(ev) {
   return {};
 }
 
+if (process.env.HACHIMI_INTERNAL_AI_GEN === '1') {
+  process.stdout.write(JSON.stringify(fallbackResponse(eventName)) + '\n');
+  process.exit(0);
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) {

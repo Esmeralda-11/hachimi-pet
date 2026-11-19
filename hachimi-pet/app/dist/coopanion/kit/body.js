@@ -137,22 +137,33 @@ export function createPet(els, opts) {
   const words = opts.words || {};
   let W = 0, H = 0, floorY = 0, S = .42, T = 0;
   let roam = opts.roam ?? 'free';
+  let temperament = opts.temperament === 'lively' || opts.temperament === 'quiet' || opts.temperament === 'daily'
+    ? opts.temperament
+    : 'daily';
   let skin = opts.skin || null;
   let hold = 0; // until T: an order from outside is in progress, free roaming waits
   const freeGround = opts.ground === 'free';
+  const nextIdleInterval = () => {
+    if (temperament === 'quiet') return 1e9;
+    if (temperament === 'lively') return rnd(7, 14);
+    return rnd(35, 65);
+  };
+  let lastHostCursorAt = 0;
+  let lastHostCursorEventAt = 0;
+  const lastHostCursorPos = { x: -1e4, y: -1e4 };
   const pet = {
     x: 260, fy: 0, gy: 0, gvy: 0, targetY: 0, vx: 0, vy: 0, facing: 1, faceVis: 1, mode: 'idle', modeT: 0, dur: 0, target: 0,
     speed: 0, stride: 0, lift: 0, bob: 0, phase: 0, lastHalf: 0, lean: 0, tilt: 0, tiltV: 0,
     sq: 0, sqv: 0, sitK: 0, stretch: 0, low: 0, gap: [50, 50], look: [0, 0], drowse: 0,
     feet: STAND.map(l => [l[2], l[3]]), blinkT: 1.5, blinkAge: 9, expr: null, exprUntil: 0,
-    nextAt: 1.2, emitAt: 0, airKind: 'jump', turned: false, startle: false, lastAct: '',
+    nextAt: nextIdleInterval(), emitAt: 0, airKind: 'jump', turned: false, startle: false, lastAct: '',
     turnAcc: 0, dx: 0, dy: 0, jumpV: 700, jumpVx: 0, xf: null, blushK: 0,
     eyeSig: '', eyeCur: null, eyePrev: null, eyeDims: [[16, 16, 0, 0], [16, 16, 0, 0]], swapAge: 9,
     glance: [0, 0], glanceAt: 0, swing: 0, swingV: 0, prevA: null, velX: 0, talkK: 0, sfxAt: 0, skid: false, cue: 0,
     pulse: null, walkId: 0, walkWord: null, listening: false, thinking: false, thoughtShown: false, placed: false, noteAt: 0, tearN: 0,
     cursor: '', status: null,
   };
-  const pointer = { x: -1e4, y: -1e4, inside: false, vx: 0, samples: [] };
+  const pointer = { x: -1e4, y: -1e4, inside: false, vx: 0, vy: 0, samples: [] };
   let press = null, strokeAcc = 0, petCool = 0;
   /** Whether the last frame found the horizontal speed not finite: a run of such frames is logged once. */
   let velXBad = false;
@@ -218,6 +229,17 @@ export function createPet(els, opts) {
     }
     return pet.x - minX() > maxX() - pet.x ? minX() : maxX();
   }
+  function pickShortTarget(minDist = 55, maxDist = 115) {
+    const lo = minX(), hi = maxX();
+    if (hi - lo <= minDist) return clamp(pet.x, lo, hi);
+    const dist = rnd(minDist, maxDist);
+    const canLeft = pet.x - minDist >= lo;
+    const canRight = pet.x + minDist <= hi;
+    let dir = Math.random() < .5 ? -1 : 1;
+    if (dir < 0 && !canLeft) dir = 1;
+    else if (dir > 0 && !canRight) dir = -1;
+    return clamp(pet.x + dir * dist, lo, hi);
+  }
   /** A ground line to walk to: anywhere for a free body, else where it stands. */
   const pickY = () => (freeGround ? rnd(minY(), floorY) : pet.gy);
 
@@ -227,7 +249,7 @@ export function createPet(els, opts) {
     pet.expr = null; pet.lastAct = a;
     const seated = pet.mode === 'sleep' || pet.mode === 'sit';
     switch (a) {
-      case 'stand': setMode(seated ? 'wake' : 'idle', seated ? { startle: false } : {}); pet.nextAt = T + 3; break;
+      case 'stand': setMode(seated ? 'wake' : 'idle', seated ? { startle: false } : {}); pet.nextAt = T + nextIdleInterval(); break;
       case 'walk': setMode('walk', { target: pickTarget(160), targetY: pickY() }); break;
       case 'run': setMode('run', { target: pet.x < W / 2 ? maxX() - rnd(0, 30) : minX() + rnd(0, 30), targetY: pickY() }); break;
       case 'jump': setMode('crouch', { jumpV: 720, jumpVx: pet.facing * 40 }); break;
@@ -341,17 +363,32 @@ export function createPet(els, opts) {
   }
 
   function decide() {
+    if (temperament === 'quiet') {
+      pet.nextAt = T + 1e9;
+      return;
+    }
+    if (temperament === 'daily') {
+      if (Math.random() < .68) {
+        const target = pickShortTarget(55, 115);
+        if (Math.abs(target - pet.x) >= 24) {
+          setMode('walk', { target, targetY: pickY() });
+          pet.lastAct = 'walk';
+        }
+      } else {
+        pet.lastAct = 'wait';
+      }
+      if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + nextIdleInterval();
+      return;
+    }
     const calm = roam === 'calm';
-    const opts2 = [['walk', calm ? 10 : 28], ['run', calm ? 0 : 12], ['look', 14], ['jump', calm ? 2 : 8], ['sit', 16], ['expr', 12], ['wait', calm ? 30 : 10]]
+    const opts2 = [['walk', calm ? 12 : 42], ['run', calm ? 0 : 12], ['look', 10], ['jump', calm ? 2 : 8], ['expr', 12], ['wait', calm ? 36 : 16]]
       .filter(o => o[1] > 0 && (o[0] !== pet.lastAct || o[0] === 'wait'));
     let r = Math.random() * opts2.reduce((a, o) => a + o[1], 0), pick = 'wait';
     for (const o of opts2) { if ((r -= o[1]) < 0) { pick = o[0]; break; } }
     if (pick === 'look') { setMode('look'); pet.lastAct = 'look'; }
-    else if (pick === 'expr') { setExpr(['happy', 'wink', 'love', 'sleepy', 'surprised', 'shy'][Math.floor(Math.random() * 6)]); pet.lastAct = 'expr'; }
-    // a sit she chose decides up front whether it ends in sleep, so she only gets drowsy when she will fall asleep
-    else if (pick === 'sit') { setMode('sit', { dur: rnd(6, 9), willSleep: Math.random() < .6 }); pet.lastAct = 'sit'; }
+    else if (pick === 'expr') { setExpr(['happy', 'wink', 'love', 'excited'][Math.floor(Math.random() * 4)]); pet.lastAct = 'expr'; }
     else if (pick !== 'wait') act(pick);
-    if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + rnd(2, 4);
+    if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + nextIdleInterval();
   }
 
   /* particles */
@@ -374,29 +411,29 @@ export function createPet(els, opts) {
     let sqT = 0, strideT = 0, liftT = 0, leanT = 0, sitT = 0, bobT = 0, rate = 0, lookT = [0, 0], tiltT = 0;
     let tk = 160, tc = 12, drowseT = 0;
     const still = !!opts.still?.();
-    const free = roam !== 'off' && T > hold && !opts.dialogOpen?.() && !still;
+    const activeWork = Boolean(pet.status && pet.status !== 'IDLE' && pet.status !== 'AWAITING_NEXT');
+    const free = roam !== 'off' && temperament !== 'quiet' && !activeWork && T > hold && !opts.dialogOpen?.() && !still;
 
     pet.blinkT -= dt; pet.blinkAge += dt;
     if (pet.blinkT <= 0) { pet.blinkAge = 0; pet.blinkT = Math.random() < .2 ? .28 : rnd(2.2, 5.2); }
 
     const head = toStage(A.gaze[0], A.gaze[1]);
-    const pdx = pointer.x - head.x, pdy = pointer.y - head.y, pm = Math.hypot(pdx, pdy) || 1;
+    const pdx = pointer.x - head.x, pdy = pointer.y - head.y, pm = Math.hypot(pdx, pdy) || 0;
+    const cursorAgeSec = (performance.now() - lastHostCursorAt) / 1000;
+    const cursorFresh = pointer.inside && lastHostCursorAt > 0 && cursorAgeSec <= 2.2;
+    const maxGazeDist = temperament === 'quiet' ? 200 : 360;
+    const gazeActive = cursorFresh && pm >= 28 && pm <= maxGazeDist;
     const track = () => {
-      if (!pointer.inside) {
-        if (T > pet.glanceAt) { pet.glance = Math.random() < .45 ? [0, 0] : [rnd(-3, 5), rnd(-3, 3)]; pet.glanceAt = T + rnd(1.2, 3); }
-        return pet.glance;
-      }
+      if (!gazeActive) return [0, 0];
       const k = Math.min(1, pm / 120);
-      return [pdx * pet.facing / pm * 5 * k, pdy / pm * 4 * k];
+      const gain = temperament === 'quiet' ? .65 : 1;
+      return [(pdx * pet.facing) / pm * 5 * k * gain, (pdy / pm) * 4 * k * gain];
     };
 
     switch (m) {
       case 'idle': {
         lookT = track();
-        if (pointer.inside && !press && pdx * pet.facing < -50 && pm < 600) {
-          pet.turnAcc += dt;
-          if (pet.turnAcc > .9) { pet.facing *= -1; pet.turnAcc = 0; }
-        } else pet.turnAcc = 0;
+        pet.turnAcc = 0;
         if (pet.listening) { lookT = [3, -4]; tiltT = -7; leanT = -2; }
         if (free && !pet.listening && T > pet.nextAt && !(pet.expr && T < pet.exprUntil)) decide();
         break;
@@ -429,7 +466,7 @@ export function createPet(els, opts) {
         if (dist < 1.5) {
           pet.speed = 0;
           const id = pet.walkId; pet.walkId = 0;
-          setMode('idle'); pet.nextAt = T + rnd(1.2, 3.2);
+          setMode('idle'); pet.nextAt = T + nextIdleInterval();
           if (id) onEvent('arrived', { walkId: id, ...at() });
         }
         break;
@@ -439,7 +476,7 @@ export function createPet(els, opts) {
         if (mt < .9) lookT = [4, -4];
         else if (mt < 1.8) { if (!pet.turned) { pet.turned = true; pet.facing *= -1; } lookT = [5, 0]; }
         else if (mt < 2.6) lookT = [1, 4];
-        else { setMode('idle'); pet.nextAt = T + rnd(1, 2.5); }
+        else { setMode('idle'); pet.nextAt = T + nextIdleInterval(); }
         break;
       }
       case 'sit': {
@@ -451,7 +488,7 @@ export function createPet(els, opts) {
         if (pet.drowse > .5) leanT = 7 * pet.drowse * Math.pow(Math.max(0, Math.sin(T * 1.3)), 6);
         if (free && mt > pet.dur) {
           if (pet.willSleep) setMode('sleep', { dur: rnd(8, 12) });
-          else { setMode('idle'); pet.sqv -= 1.2; pet.nextAt = T + rnd(1.5, 3); }
+          else { setMode('idle'); pet.sqv -= 1.2; pet.nextAt = T + nextIdleInterval(); }
         }
         break;
       }
@@ -463,14 +500,14 @@ export function createPet(els, opts) {
       case 'wake': {
         if (pet.startle) {
           sitT = 0; lookT = [3, -2];
-          if (mt > .9) { setMode('idle'); pet.nextAt = T + rnd(1.5, 3); }
+          if (mt > .9) { setMode('idle'); pet.nextAt = T + nextIdleInterval(); }
         } else {
           sitT = mt < 1.1 ? 1 : 0;
           if (mt > .5 && !pet.cue) { pet.cue = 1; play('yawn', 'face'); }
           sqT = mt > .5 && mt < 1.3 ? -.1 : 0;
           leanT = mt < .5 ? 5 : mt < 1.2 ? -5 : 0;
           lookT = mt > 1.2 ? track() : [0, 0];
-          if (mt > 1.8) { setMode('idle'); pet.nextAt = T + rnd(1, 2); }
+          if (mt > 1.8) { setMode('idle'); pet.nextAt = T + nextIdleInterval(); }
         }
         break;
       }
@@ -515,7 +552,7 @@ export function createPet(els, opts) {
         if (mt >= 2.4 && !pet.cue) { pet.cue = 1; play('shake', 'move'); }
         if (mt < 2.4) tiltT = 8 * Math.sin(T * 4.5) * Math.min(1, mt * 2);
         else if (mt < 3) { const k = (mt - 2.4) / .6; tiltT = 12 * Math.sin(mt * 34) * (1 - k); }
-        else { setMode('idle'); pet.sqv -= 1; pet.nextAt = T + rnd(1.5, 3); }
+        else { setMode('idle'); pet.sqv -= 1; pet.nextAt = T + nextIdleInterval(); }
         break;
       }
       case 'dance': {
@@ -528,12 +565,13 @@ export function createPet(els, opts) {
         if (half !== pet.lastHalf) play('step', 'move', false, half & 1);
         pet.lastHalf = half;
         if (T > pet.noteAt) { emit('note', toStage(A.z[0], A.z[1] + pet.low), { vx: pet.facing * rnd(10, 30), vy: -34, life: 1.8 }); pet.noteAt = T + .6; }
-        if (mt > pet.dur) { setMode('idle'); pet.nextAt = T + rnd(1.5, 3); }
+        if (mt > pet.dur) { setMode('idle'); pet.nextAt = T + nextIdleInterval(); }
         break;
       }
       case 'drag': {
         pet.dx = lerp(pet.dx, pointer.x, ease(28, dt));
         pet.dy = lerp(pet.dy, Math.min(pointer.y, floorY - 245 * S), ease(28, dt));
+        if (Math.abs(pointer.vx) > 60) pet.facing = pointer.vx > 0 ? 1 : -1;
         tiltT = clamp(pointer.vx * .035, -40, 40); tk = 90; tc = 5;
         if (Math.abs(pointer.vx) > 500 && T > pet.sfxAt) { play('squeak', 'touch'); pet.sfxAt = T + rnd(.4, .7); }
         break;
@@ -597,6 +635,7 @@ export function createPet(els, opts) {
     pet.faceVis = lerp(pet.faceVis, pet.facing, ease(15, dt));
     if (m !== 'walk' && m !== 'run' && m !== 'dance') pet.phase = lerp(pet.phase, Math.round(pet.phase / Math.PI) * Math.PI, ease(6, dt));
     pointer.vx *= Math.exp(-dt * 6);
+    pointer.vy *= Math.exp(-dt * 6);
 
     // secondary motion for ears/antenna/scarf: lags behind horizontal movement
     const AX = pet.mode === 'drag' ? pet.dx : pet.x;
@@ -651,6 +690,13 @@ export function createPet(els, opts) {
     }
     pet.talkK *= Math.exp(-dt * 12);
     pet._fc = fc; pet._fname = fname;
+    pet._gaze = {
+      active: gazeActive && !fc.lookLock && !fc.lookAt && pet.mode !== 'sleep' && pet.mode !== 'drag',
+      dx: pdx,
+      dy: pdy,
+      dist: pm,
+      fresh: cursorFresh,
+    };
   }
 
   function land() {
@@ -661,9 +707,9 @@ export function createPet(els, opts) {
     dustAt(128, impact > 900 ? 7 : 3, 70);
     if (kind === 'throw' && impact > 1000) { setMode('dizzy'); onEvent('touch', { kind: 'crash' }); return; }
     setMode('land');
-    if (kind === 'throw') { pet.expr = 'surprised'; pet.exprUntil = T + .9; pet.nextAt = T + 2; }
-    else if (kind === 'drop') { pet.expr = 'happy'; pet.exprUntil = T + 1.6; pet.nextAt = T + 2.6; }
-    else pet.nextAt = T + rnd(.8, 2);
+    if (kind === 'throw' && impact > 520) { pet.expr = 'surprised'; pet.exprUntil = T + .9; pet.nextAt = T + nextIdleInterval(); }
+    else if (kind === 'drop' && impact > 520) { pet.expr = 'happy'; pet.exprUntil = T + 1.6; pet.nextAt = T + nextIdleInterval(); }
+    else pet.nextAt = T + nextIdleInterval();
   }
 
   /** What render last wrote into the group's transform, the shadow and the particles; the same value is not written again. */
@@ -699,8 +745,11 @@ export function createPet(els, opts) {
     const face = { ...fc, eyes, gap: pet.gap.map(g => Math.min(64, g + pet.talkK * 12)), blush: pet.blushK };
     const gesture = pet.pulse ? { kind: pet.pulse.kind, k: clamp((T - pet.pulse.t0) / pet.pulse.dur, 0, 1) } : null;
     custom.draw(petG, face, {
-      look: pet.look, legs, low: pet.low, t: T, blink, eyeClose, acc: skin, swing: pet.swing,
+      look: pet.look, gaze: pet._gaze || { active: false, dx: 0, dy: 0, dist: 0, fresh: false }, temperament,
+      legs, low: pet.low, t: T, blink, eyeClose, acc: skin, swing: pet.swing,
       face: fname, mode: pet.mode, modeT: pet.modeT, talk: pet.talkK, status: pet.status, drowse: pet.drowse, sit: pet.sitK, facing: pet.faceVis, tilt: pet.tilt, lean, groupRot: rot, gesture,
+      vx: pet.vx, vy: pet.vy, airKind: pet.airKind,
+      pressing: !!press, velX: pet.velX, dragVx: drag ? pointer.vx : 0, dragVy: drag ? pointer.vy : 0,
     });
 
     const footY = drag ? pet.dy + 220 * S * 1.09 : pet.fy;
@@ -754,8 +803,28 @@ export function createPet(els, opts) {
     pet.sqv -= 1.2; pet.tiltV = 0;
     onEvent('touch', { kind: 'grab' });
   }
+  function hostCursorMove(pt) {
+    const tNow = performance.now();
+    lastHostCursorEventAt = tNow;
+    if (!pt || !pt.insideWindow) {
+      if (!press) pointer.inside = false;
+      return;
+    }
+    const movedDist = Math.hypot(pt.x - lastHostCursorPos.x, pt.y - lastHostCursorPos.y);
+    pointer.x = pt.x;
+    pointer.y = pt.y;
+    pointer.inside = true;
+    if (movedDist > 1.5) {
+      lastHostCursorPos.x = pt.x;
+      lastHostCursorPos.y = pt.y;
+      lastHostCursorAt = tNow;
+    }
+  }
   function pointerDown(p) {
     Object.assign(pointer, { x: p.x, y: p.y, inside: true });
+    lastHostCursorPos.x = p.x;
+    lastHostCursorPos.y = p.y;
+    lastHostCursorAt = performance.now();
     if (!hitPet(p)) return false;
     press = { x: p.x, y: p.y, t: now(p) };
     pointer.samples = [{ t: now(p), x: p.x, y: p.y }];
@@ -768,9 +837,16 @@ export function createPet(els, opts) {
     const t = now(p);
     const ddx = p.x - pointer.x, ddy = p.y - pointer.y;
     Object.assign(pointer, { x: p.x, y: p.y, inside: true });
+    if (Math.hypot(p.x - lastHostCursorPos.x, p.y - lastHostCursorPos.y) > 1.5) {
+      lastHostCursorPos.x = p.x;
+      lastHostCursorPos.y = p.y;
+      lastHostCursorAt = performance.now();
+    }
     pointer.samples.push({ t, x: p.x, y: p.y });
     while (pointer.samples.length > 2 && t - pointer.samples[0].t > 110) pointer.samples.shift();
-    pointer.vx = lerp(pointer.vx, velocity().x, .35);
+    const vNow = velocity();
+    pointer.vx = lerp(pointer.vx, vNow.x, .35);
+    pointer.vy = lerp(pointer.vy, vNow.y, .35);
 
     if (press && pet.mode !== 'drag' && Math.hypot(p.x - press.x, p.y - press.y) > 6) grab();
     if (press) return (pet.cursor = 'grabbing');
@@ -804,21 +880,28 @@ export function createPet(els, opts) {
         pet.fy = Math.min(floorY, foot.y);
         pet.vx = clamp(v.x, -1800, 1800); pet.vy = clamp(v.y, -1800, 1400);
       }
-      pet.airKind = 'throw';
+      if (speed <= 120) {
+        pet.vx = 0; pet.gvy = 0; pet.vy = Math.max(0, v.y * .25);
+      }
+      pet.airKind = speed <= 240 ? 'drop' : 'throw';
       if (speed > 700) play('whoosh', 'move');
       setMode('air');
       onEvent('touch', { kind: speed > 700 ? 'throw' : 'drop', x: Math.round(pet.x) });
     } else if (now(p) - press.t < 400) {
       if (pet.mode === 'sleep' || pet.mode === 'sit') {
         const wasAsleep = pet.mode === 'sleep';
-        setMode('wake', { startle: true }); pet.sqv -= 2.2; pet.nextAt = T + 2.4;
+        setMode('wake', { startle: true }); pet.sqv -= 2.2; pet.nextAt = T + nextIdleInterval();
         play('surprised', 'face');
         onEvent('touch', { kind: 'poke', woke: wasAsleep });
       } else if (pet.mode !== 'dizzy') {
         play('poke', 'touch');
-        const r = ['happy', 'wink', 'surprised', 'love', 'angry'][Math.floor(Math.random() * 5)];
-        setExpr(r);
-        if (Math.random() < .5 && pet.mode === 'idle') setMode('crouch', { jumpV: 480, jumpVx: 0 });
+        if (temperament === 'quiet') {
+          setExpr('happy', 1.8);
+        } else {
+          const r = ['happy', 'wink', 'surprised', 'love', 'angry'][Math.floor(Math.random() * 5)];
+          setExpr(r);
+          if (Math.random() < .5 && pet.mode === 'idle') setMode('crouch', { jumpV: 480, jumpVx: 0 });
+        }
         onEvent('touch', { kind: 'poke' });
       }
     }
@@ -832,7 +915,7 @@ export function createPet(els, opts) {
   function dropAt(p) {
     press = null;
     if (pet.mode !== 'drag') return;
-    Object.assign(pointer, { x: p.x, y: p.y, vx: 0, samples: [] });
+    Object.assign(pointer, { x: p.x, y: p.y, vx: 0, vy: 0, samples: [] });
     pet.x = clamp(p.x, minX(), maxX());
     pet.fy = Math.min(floorY, p.y + 220 * S);
     if (freeGround) pet.gy = clamp(pet.fy, minY(), floorY);
@@ -852,10 +935,17 @@ export function createPet(els, opts) {
     for (const s of pointer.samples) { s.x += dx; s.y += dy; }
     if (press) { press.x += dx; press.y += dy; }
   }
-  function pointerLeave() { if (!press) pointer.inside = false; }
+  function pointerLeave() {
+    if (!press && performance.now() - lastHostCursorEventAt > 200) {
+      pointer.inside = false;
+    }
+  }
 
   /** Head top in stage pixels, for placing a speech bubble. */
-  const anchor = () => toStage(A.bubble[0], A.bubble[1] + pet.low);
+  const anchor = () => {
+    const b = custom?.getBubbleAnchor?.() || A.bubble;
+    return toStage(b[0], b[1] + pet.low);
+  };
 
   /**
    * Where the body is and what it is doing, in stage pixels, for the page around it: its box and hit
@@ -879,7 +969,7 @@ export function createPet(els, opts) {
   custom?.setSkin?.(skin);
   return {
     pet, step, render, resize, act, setExpr, doWord, walkTo, stopWalk, toStage, hitPet, busy, layout,
-    pointerDown, pointerMove, pointerUp, pointerLeave, dropAt, shiftDrag,
+    pointerDown, pointerMove, pointerUp, pointerLeave, hostCursorMove, dropAt, shiftDrag,
     get pressing() { return !!press; },
     /** Pressed, carried, airborne, walking, running, dancing, turning round, or in a short gesture (nod, wave, bow…): motion that frames far apart show as jumps. */
     get moving() {
@@ -903,8 +993,28 @@ export function createPet(els, opts) {
     },
     get figure() { return custom; },
     get skin() { return skin; },
-    setRoam(r) { roam = r; if (r !== 'off') pet.nextAt = T + 1; },
+    setRoam(r) {
+      const prev = roam;
+      roam = r;
+      if (r !== 'off' && (prev === 'off' || pet.nextAt < T + 2)) {
+        pet.nextAt = T + nextIdleInterval();
+      }
+    },
     get roam() { return roam; },
+    setTemperament(t) {
+      const nextT = t === 'lively' || t === 'quiet' || t === 'daily' ? t : 'daily';
+      if (temperament === nextT) return;
+      temperament = nextT;
+      pet.nextAt = T + nextIdleInterval();
+      if (temperament === 'quiet') {
+        if ((pet.mode === 'walk' || pet.mode === 'run') && !pet.walkId && !pet.walkWord) {
+          setMode('idle');
+        } else if (pet.mode === 'look') {
+          setMode('idle');
+        }
+      }
+    },
+    get temperament() { return temperament; },
     /** Outside orders keep free roaming quiet for `seconds`. */
     holdRoam(seconds) { hold = Math.max(hold, T + seconds); },
     talk() { pet.talkK = 1; },

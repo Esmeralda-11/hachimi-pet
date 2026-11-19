@@ -1,13 +1,33 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { BridgeSnapshot, PetReactionEvent, PetSettings } from '../types';
+import type { BridgeSnapshot, PetPalette, PetReactionEvent, PetSettings } from '../types';
+
+const VALID_PALETTES = new Set<PetPalette>(['forest', 'ocean', 'plum', 'amber', 'graphite']);
+
+function normalizePaletteId(raw?: string | null): PetPalette {
+  const s = String(raw || '').trim().toLowerCase();
+  if (VALID_PALETTES.has(s as PetPalette)) return s as PetPalette;
+  return 'forest';
+}
 
 const DEFAULT_SETTINGS: PetSettings = {
   mode: 'companion',
-  scheme: 'deepseek',
+  packId: 'hachimi',
+  scheme: 'astral',
   outfit: 'maid',
   autoSchemeByModel: false,
   roam: 'free',
-  scale: 0.95,
+  temperament: 'daily',
+  theme: 'system',
+  palette: 'forest',
+  mainScale: 0.85,
+  subagentScale: 0.80,
+  scale: 0.85,
+  petHidden: false,
+  trayHidden: false,
+  showSpeechBubble: true,
+  showStatusPill: true,
+  showTelemetryBar: true,
+  showSubagentHud: true,
   soundOn: true,
   safetyGateEnabled: false,
   interceptRiskyOnly: true,
@@ -18,8 +38,43 @@ const DEFAULT_SETTINGS: PetSettings = {
   selectedProjectId: '',
 };
 
+function normalizeSettings(raw?: Partial<PetSettings> | null): PetSettings {
+  const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  const resolvedMain =
+    typeof raw?.mainScale === 'number' && Number.isFinite(raw.mainScale)
+      ? raw.mainScale
+      : typeof raw?.scale === 'number' && Number.isFinite(raw.scale)
+        ? raw.scale
+        : DEFAULT_SETTINGS.mainScale;
+  merged.mainScale = resolvedMain;
+  merged.scale = resolvedMain;
+  if (
+    merged.temperament !== 'lively' &&
+    merged.temperament !== 'daily' &&
+    merged.temperament !== 'quiet'
+  ) {
+    merged.temperament = 'daily';
+  }
+  if (merged.theme !== 'system' && merged.theme !== 'light' && merged.theme !== 'dark') {
+    merged.theme = 'system';
+  }
+  merged.palette = normalizePaletteId(merged.palette);
+  if (typeof merged.subagentScale !== 'number' || !Number.isFinite(merged.subagentScale)) {
+    merged.subagentScale = DEFAULT_SETTINGS.subagentScale;
+  }
+  merged.petHidden = Boolean(merged.petHidden);
+  merged.trayHidden = Boolean(merged.trayHidden);
+  merged.showSpeechBubble = merged.showSpeechBubble !== false;
+  merged.showStatusPill = merged.showStatusPill !== false;
+  merged.showTelemetryBar = merged.showTelemetryBar !== false;
+  merged.showSubagentHud = merged.showSubagentHud !== false;
+  return merged;
+}
+
 const EMPTY_SNAPSHOT: BridgeSnapshot = {
   settings: DEFAULT_SETTINGS,
+  packs: [],
+  activePack: null,
   activeConversationId: null,
   agyRunning: false,
   projects: [],
@@ -63,10 +118,24 @@ export function useBridgeSocket(
           const msg = JSON.parse(ev.data);
           const { type, payload } = msg;
           if (type === 'state:sync' && payload) {
-            setSnapshot(payload);
+            setSnapshot({
+              ...payload,
+              settings: normalizeSettings(payload.settings),
+            });
             if (!payload.agyRunning) {
               setStreamingReply(null);
             }
+          } else if (type === 'pet:scheme' && payload) {
+            setSnapshot((prev) => ({
+              ...prev,
+              settings: {
+                ...prev.settings,
+                ...(payload.packId ? { packId: payload.packId } : {}),
+                ...(payload.scheme ? { scheme: payload.scheme } : {}),
+                ...(payload.outfit ? { outfit: payload.outfit } : {}),
+              },
+              ...(payload.activePack ? { activePack: payload.activePack } : {}),
+            }));
           } else if (type === 'pet:Reaction' && payload) {
             onReactionRef.current?.(payload);
           } else if (type === 'pet:command' && payload) {
@@ -161,8 +230,17 @@ export function useBridgeSocket(
 
   const updateSettings = useCallback(
     (patch: Partial<PetSettings>) => {
-      setSnapshot((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }));
-      sendAction('ui:update_settings', patch as Record<string, unknown>);
+      const syncedPatch = { ...patch };
+      if (typeof syncedPatch.mainScale === 'number' && syncedPatch.scale === undefined) {
+        syncedPatch.scale = syncedPatch.mainScale;
+      } else if (typeof syncedPatch.scale === 'number' && syncedPatch.mainScale === undefined) {
+        syncedPatch.mainScale = syncedPatch.scale;
+      }
+      setSnapshot((prev) => ({
+        ...prev,
+        settings: normalizeSettings({ ...prev.settings, ...syncedPatch }),
+      }));
+      sendAction('ui:update_settings', syncedPatch as Record<string, unknown>);
     },
     [sendAction]
   );

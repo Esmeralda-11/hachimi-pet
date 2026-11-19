@@ -2,6 +2,11 @@ const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const LOCAL_ORIGIN_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i;
+
+function isAllowedLocalOrigin(origin) {
+  return typeof origin === 'string' && LOCAL_ORIGIN_RE.test(origin.trim());
+}
 
 class MiniWsClient extends EventEmitter {
   constructor(socket) {
@@ -124,6 +129,27 @@ class WebSocketServer extends EventEmitter {
   }
 
   _handleUpgrade(req, socket) {
+    const rawOrigin = Array.isArray(req.headers?.origin) ? req.headers.origin[0] : req.headers?.origin;
+    if (rawOrigin !== undefined && !isAllowedLocalOrigin(rawOrigin)) {
+      try {
+        if (typeof socket.end === 'function') {
+          socket.end('HTTP/1.1 403 Forbidden\r\n\r\n', () => {
+            try { socket.destroy(); } catch { /* ignore */ }
+          });
+          const t = setTimeout(() => {
+            try { if (!socket.destroyed) socket.destroy(); } catch { /* ignore */ }
+          }, 250);
+          t.unref?.();
+        } else {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+        }
+      } catch {
+        try { socket.destroy(); } catch { /* ignore */ }
+      }
+      return;
+    }
+
     const key = req.headers['sec-websocket-key'];
     if (!key) {
       socket.destroy();
@@ -153,4 +179,4 @@ class WebSocketServer extends EventEmitter {
   }
 }
 
-module.exports = { WebSocketServer };
+module.exports = { WebSocketServer, isAllowedLocalOrigin };

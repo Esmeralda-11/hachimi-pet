@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('petHost', {
   openExternal(url) {
     ipcRenderer.send('petHost:openExternal', url);
   },
+  showContextMenu() {
+    ipcRenderer.send('petHost:showContextMenu');
+  },
   quitApp() {
     ipcRenderer.send('petHost:quit');
   },

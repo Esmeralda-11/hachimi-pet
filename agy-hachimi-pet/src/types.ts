@@ -8,13 +8,57 @@ export type PetExecutionStatus =
   | 'AWAITING_NEXT'
   | 'ERROR';
 
+export interface PetVariantInfo {
+  id: string;
+  name: string;
+  label?: string;
+  color?: string;
+  thumb?: string;
+  thumbUrl?: string;
+  asset?: string;
+  assetUrl?: string;
+  layout?: 'whale' | 'compact-4x3' | 'single-image' | 'codex-v2-8x11';
+  frameWidth?: number;
+  frameHeight?: number;
+  cols?: number;
+  rows?: number;
+  asymmetric?: boolean;
+}
+
+export interface PetPackSummary {
+  id: string;
+  name: string;
+  slotLabel: string;
+  badgeEmoji: string;
+  type: 'whale' | 'sprite';
+  defaultVariant: string;
+  isBuiltin?: boolean;
+  variants: PetVariantInfo[];
+}
+
+export type PetTemperament = 'lively' | 'daily' | 'quiet';
+export type PetThemeMode = 'system' | 'light' | 'dark';
+export type PetPalette = 'forest' | 'ocean' | 'plum' | 'amber' | 'graphite';
+
 export interface PetSettings {
   mode: 'companion' | 'standalone';
+  packId?: string;
   scheme: string;
   outfit: string;
   autoSchemeByModel: boolean;
   roam: 'free' | 'off';
+  temperament: PetTemperament;
+  theme?: PetThemeMode;
+  palette?: PetPalette;
+  mainScale: number;
+  subagentScale: number;
   scale: number;
+  petHidden: boolean;
+  trayHidden?: boolean;
+  showSpeechBubble: boolean;
+  showStatusPill: boolean;
+  showTelemetryBar: boolean;
+  showSubagentHud: boolean;
   soundOn: boolean;
   safetyGateEnabled: boolean;
   interceptRiskyOnly: boolean;
@@ -110,6 +154,7 @@ export interface SubagentItem {
   typeName?: string;
   source?: 'subagent' | 'teamwork' | 'swarm' | 'test';
   slotIndex?: number;
+  packId?: string;
   scheme: string;
   outfit: string;
   status: 'WORKING' | 'THINKING' | 'WAITING' | 'DONE' | 'ERROR';
@@ -120,7 +165,10 @@ export interface SubagentItem {
 }
 
 export interface BridgeSnapshot {
+  palette?: PetPalette;
   settings: PetSettings;
+  packs?: PetPackSummary[];
+  activePack?: PetPackSummary | null;
   activeConversationId: string | null;
   agyRunning: boolean;
   projects?: AntigravityProject[];
@@ -138,6 +186,7 @@ export interface PetReactionEvent {
   badge?: string;
   thinking?: boolean;
   openMiniBar?: boolean;
+  interactive?: boolean;
 }
 
 declare global {
@@ -148,6 +197,7 @@ declare global {
       focusWindow: () => void;
       blurWindow: () => void;
       openExternal: (url: string) => void;
+      showContextMenu?: () => void;
       quitApp: () => void;
       pickDirectory: () => Promise<string | null>;
       onCursor: (cb: (pt: { x: number; y: number; insideWindow: boolean; locked: boolean }) => void) => () => void;
