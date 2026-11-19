@@ -141,13 +141,10 @@ export function createPet(els, opts) {
     ? opts.temperament
     : 'daily';
   let skin = opts.skin || null;
+  let personaSeed = Number.isFinite(Number(opts.personaSeed)) ? Math.floor(Number(opts.personaSeed)) : 0;
+  let workHint = typeof opts.workHint === 'string' ? opts.workHint : '';
   let hold = 0; // until T: an order from outside is in progress, free roaming waits
   const freeGround = opts.ground === 'free';
-  const nextIdleInterval = () => {
-    if (temperament === 'quiet') return 1e9;
-    if (temperament === 'lively') return rnd(7, 14);
-    return rnd(35, 65);
-  };
   let lastHostCursorAt = 0;
   let lastHostCursorEventAt = 0;
   const lastHostCursorPos = { x: -1e4, y: -1e4 };
@@ -156,13 +153,21 @@ export function createPet(els, opts) {
     speed: 0, stride: 0, lift: 0, bob: 0, phase: 0, lastHalf: 0, lean: 0, tilt: 0, tiltV: 0,
     sq: 0, sqv: 0, sitK: 0, stretch: 0, low: 0, gap: [50, 50], look: [0, 0], drowse: 0,
     feet: STAND.map(l => [l[2], l[3]]), blinkT: 1.5, blinkAge: 9, expr: null, exprUntil: 0,
-    nextAt: nextIdleInterval(), emitAt: 0, airKind: 'jump', turned: false, startle: false, lastAct: '',
+    nextAt: 0, emitAt: 0, airKind: 'jump', turned: false, startle: false, lastAct: '',
     turnAcc: 0, dx: 0, dy: 0, jumpV: 700, jumpVx: 0, xf: null, blushK: 0,
     eyeSig: '', eyeCur: null, eyePrev: null, eyeDims: [[16, 16, 0, 0], [16, 16, 0, 0]], swapAge: 9,
     glance: [0, 0], glanceAt: 0, swing: 0, swingV: 0, prevA: null, velX: 0, talkK: 0, sfxAt: 0, skid: false, cue: 0,
     pulse: null, walkId: 0, walkWord: null, listening: false, thinking: false, thoughtShown: false, placed: false, noteAt: 0, tearN: 0,
-    cursor: '', status: null,
+    cursor: '', status: null, statusSince: 0, workSince: 0,
   };
+  const isActiveWork = () => Boolean(pet.status && pet.status !== 'IDLE' && pet.status !== 'AWAITING_NEXT');
+  const isRoamableWork = () => isActiveWork() && pet.status !== 'ERROR' && pet.status !== 'WAITING_USER' && pet.status !== 'WAITING';
+  const nextIdleInterval = () => {
+    if (temperament === 'quiet') return 1e9;
+    if (temperament === 'lively') return isActiveWork() ? rnd(16, 26) : rnd(7, 14);
+    return isActiveWork() ? rnd(26, 44) : rnd(30, 55);
+  };
+  pet.nextAt = nextIdleInterval();
   const pointer = { x: -1e4, y: -1e4, inside: false, vx: 0, vy: 0, samples: [] };
   let press = null, strokeAcc = 0, petCool = 0;
   /** Whether the last frame found the horizontal speed not finite: a run of such frames is logged once. */
@@ -368,16 +373,69 @@ export function createPet(els, opts) {
       return;
     }
     if (temperament === 'daily') {
-      if (Math.random() < .68) {
+      if (isActiveWork()) {
+        if (!isRoamableWork()) {
+          pet.lastAct = 'wait';
+          if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + nextIdleInterval();
+          return;
+        }
+        const r = Math.random();
+        if (r < .52) {
+          const target = pickShortTarget(50, 105);
+          if (Math.abs(target - pet.x) >= 24) {
+            setMode('walk', { target, targetY: pickY() });
+            pet.lastAct = 'walk';
+          } else {
+            pet.lastAct = 'wait';
+          }
+        } else if (r < .68 && pet.lastAct !== 'hop') {
+          act('hop');
+        } else {
+          pet.lastAct = 'wait';
+        }
+        if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + nextIdleInterval();
+        return;
+      }
+      const r = Math.random();
+      if (r < .56) {
         const target = pickShortTarget(55, 115);
         if (Math.abs(target - pet.x) >= 24) {
           setMode('walk', { target, targetY: pickY() });
           pet.lastAct = 'walk';
+        } else {
+          pet.lastAct = 'wait';
         }
+      } else if (r < .70 && pet.lastAct !== 'hop') {
+        act('hop');
       } else {
         pet.lastAct = 'wait';
       }
       if (pet.mode === 'idle' && T >= pet.nextAt) pet.nextAt = T + nextIdleInterval();
+      return;
+    }
+    if (isActiveWork()) {
+      if (!isRoamableWork()) {
+        pet.lastAct = 'wait';
+        pet.nextAt = T + nextIdleInterval();
+        return;
+      }
+      const r = Math.random();
+      if (r < .58) {
+        const target = pickShortTarget(55, 115);
+        if (Math.abs(target - pet.x) >= 24) {
+          setMode('walk', { target, targetY: pickY() });
+          pet.lastAct = 'walk';
+        } else {
+          setMode('look');
+          pet.lastAct = 'look';
+        }
+      } else if (r < .78 && pet.lastAct !== 'hop') {
+        act('hop');
+      } else {
+        setMode('look');
+        pet.lastAct = 'look';
+      }
+      pet.nextAt = T + nextIdleInterval();
       return;
     }
     const calm = roam === 'calm';
@@ -411,8 +469,18 @@ export function createPet(els, opts) {
     let sqT = 0, strideT = 0, liftT = 0, leanT = 0, sitT = 0, bobT = 0, rate = 0, lookT = [0, 0], tiltT = 0;
     let tk = 160, tc = 12, drowseT = 0;
     const still = !!opts.still?.();
-    const activeWork = Boolean(pet.status && pet.status !== 'IDLE' && pet.status !== 'AWAITING_NEXT');
-    const free = roam !== 'off' && temperament !== 'quiet' && !activeWork && T > hold && !opts.dialogOpen?.() && !still;
+    const activeWork = isActiveWork();
+    const workingRoamReady =
+      isRoamableWork() &&
+      ((temperament === 'lively' && T - pet.workSince > 14) ||
+        (temperament === 'daily' && T - pet.workSince > 22));
+    const free =
+      roam !== 'off' &&
+      temperament !== 'quiet' &&
+      (!activeWork || workingRoamReady) &&
+      T > hold &&
+      !opts.dialogOpen?.() &&
+      !still;
 
     pet.blinkT -= dt; pet.blinkAge += dt;
     if (pet.blinkT <= 0) { pet.blinkAge = 0; pet.blinkT = Math.random() < .2 ? .28 : rnd(2.2, 5.2); }
@@ -747,7 +815,9 @@ export function createPet(els, opts) {
     custom.draw(petG, face, {
       look: pet.look, gaze: pet._gaze || { active: false, dx: 0, dy: 0, dist: 0, fresh: false }, temperament,
       legs, low: pet.low, t: T, blink, eyeClose, acc: skin, swing: pet.swing,
-      face: fname, mode: pet.mode, modeT: pet.modeT, talk: pet.talkK, status: pet.status, drowse: pet.drowse, sit: pet.sitK, facing: pet.faceVis, tilt: pet.tilt, lean, groupRot: rot, gesture,
+      face: fname, mode: pet.mode, modeT: pet.modeT, talk: pet.talkK, status: pet.status,
+      statusT: Math.max(0, T - pet.statusSince), personaSeed, workHint,
+      drowse: pet.drowse, sit: pet.sitK, facing: pet.faceVis, tilt: pet.tilt, lean, groupRot: rot, gesture,
       vx: pet.vx, vy: pet.vy, airKind: pet.airKind,
       pressing: !!press, velX: pet.velX, dragVx: drag ? pointer.vx : 0, dragVy: drag ? pointer.vy : 0,
     });
@@ -1021,7 +1091,36 @@ export function createPet(els, opts) {
     setListening(on) { pet.listening = on; if (on && (pet.mode === 'walk' || pet.mode === 'run')) setMode('idle'); },
     setThinking(on) { pet.thinking = on; },
     /** What the bot is busy with as the page's status bubble names it (`kind`), or null; the figure reads it from `frame.status`. */
-    setStatus(kind) { pet.status = typeof kind === 'string' ? kind : null; },
+    setStatus(kind) {
+      const nextStatus = typeof kind === 'string' ? kind : null;
+      if (nextStatus !== pet.status) {
+        const wasActive = isActiveWork();
+        const wasRoamable = isRoamableWork();
+        pet.status = nextStatus;
+        pet.statusSince = T;
+        const nowActive = isActiveWork();
+        const nowRoamable = isRoamableWork();
+        if (nowRoamable !== wasRoamable) {
+          pet.workSince = T;
+          pet.nextAt = T + nextIdleInterval();
+        } else if (nowActive !== wasActive) {
+          pet.nextAt = T + nextIdleInterval();
+        }
+        if (nextStatus === 'AWAITING_NEXT') {
+          pet.nextAt = Math.max(pet.nextAt, T + 2.0);
+        }
+        if (
+          (nextStatus === 'ERROR' || nextStatus === 'WAITING_USER') &&
+          (pet.mode === 'walk' || pet.mode === 'run') &&
+          !pet.walkId &&
+          !pet.walkWord
+        ) {
+          setMode('idle');
+        }
+      }
+    },
+    setPersonaSeed(seed) { personaSeed = Number.isFinite(Number(seed)) ? Math.floor(Number(seed)) : 0; },
+    setWorkHint(hint) { workHint = typeof hint === 'string' ? hint : ''; },
     /** The page shows the bot's thinking in a bubble of its own. */
     setThoughtShown(on) { pet.thoughtShown = on; },
     anchor,
@@ -1119,6 +1218,9 @@ export function createBody(host, opts) {
       if (typeof s.thinking === 'boolean') ctl.setThinking(s.thinking);
       if (typeof s.thoughtShown === 'boolean') ctl.setThoughtShown(s.thoughtShown);
       if ('status' in s) ctl.setStatus(s.status);
+      if (s.temperament) ctl.setTemperament(s.temperament);
+      if ('personaSeed' in s) ctl.setPersonaSeed(s.personaSeed);
+      if ('workHint' in s) ctl.setWorkHint(s.workHint);
       if (s.skin) { ctl.setSkin(s.skin); if (opts.skinCss) skinStyle.textContent = opts.skinCss(s.skin); }
       if (s.theme) doc.documentElement.dataset.theme = s.theme;
     },

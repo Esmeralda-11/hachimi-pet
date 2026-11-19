@@ -90,6 +90,43 @@ interface WhaleStageProps {
 const dynamicImport = new Function('url', 'return import(url)') as (url: string) => Promise<any>;
 
 /**
+ * Compute a deterministic positive 31-bit integer seed so each pet gets a distinct phase offset.
+ */
+function hashPersonaSeed(str: string): number {
+  let h = 2166136261;
+  const text = String(str || '');
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  const seed = h & 0x7fffffff;
+  return seed > 0 ? seed : 1;
+}
+
+function matchWorkHintText(text: string): string | null {
+  if (!text) return null;
+  if (/读|查|搜|检|审|浏览|分析|研究|\b(?:read|search|audit|review)/i.test(text)) return 'read';
+  if (/等|休|候|\b(?:wait|sleep|idle)/i.test(text)) return 'wait';
+  if (/跑|测|构建|命令|安装|同步|验证|验收|\b(?:run|test|build|verif)/i.test(text)) return 'cmd';
+  if (/写|改|编|画|生图|修|\b(?:edit|writ|fix|creat)/i.test(text)) return 'code';
+  return null;
+}
+
+/**
+ * Infer a coarse work-beat hint from a subagent's progress text, role, or status.
+ */
+function inferSubagentWorkHint(sub: { progressText?: string; role?: string; status?: string }): string {
+  return (
+    matchWorkHintText(String(sub?.progressText || '')) ||
+    matchWorkHintText(String(sub?.role || '')) ||
+    (sub?.status === 'WAITING' ? 'wait' : 'think')
+  );
+}
+
+/**
  * Compute non-overlapping horizontal lane X for a subagent based on `slotIndex` and stage width.
  */
 function computeSubagentLaneX(slotIndex: number, stageWidth: number): number {
@@ -264,20 +301,44 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
         return;
       }
       const isQuiet = (settingsRef.current.temperament || 'daily') === 'quiet';
-      ctl.holdRoam(7);
+      const isPassiveWorkExpr =
+        !ev.interactive &&
+        !ev.motion &&
+        !ev.speech &&
+        (ev.expression === 'determined' || ev.expression === 'thinking');
+      const isAmbientMotion =
+        ev.motion === 'hop' || ev.motion === 'jump' || ev.motion === 'nod' || ev.motion === 'look';
+      const isPulseMotion =
+        ev.motion === 'nod' || ev.motion === 'shake' || ev.motion === 'shiver' || ev.motion === 'wave';
+
+      if (!isPassiveWorkExpr) {
+        ctl.holdRoam(!ev.interactive && !ev.speech && isAmbientMotion ? 3.2 : 7);
+      }
       if (typeof ev.thinking === 'boolean') {
         ctl.setThinking(ev.thinking);
       }
-      if (ev.expression) {
-        ctl.setExpr(ev.expression, 3.2);
-      }
-      if (ev.motion) {
-        const isAmbientMotion =
-          ev.motion === 'hop' || ev.motion === 'jump' || ev.motion === 'nod' || ev.motion === 'look';
-        if (!(isQuiet && !ev.interactive && isAmbientMotion)) {
-          ctl.doWord(ev.motion);
+
+      const shouldRunMotion = Boolean(ev.motion) && !(isQuiet && !ev.interactive && isAmbientMotion);
+      if (shouldRunMotion && isPulseMotion) {
+        ctl.doWord(ev.motion!);
+        if (ev.expression) {
+          ctl.setExpr(ev.expression, 3.2);
+        }
+      } else {
+        if (ev.expression) {
+          if (isPassiveWorkExpr) {
+            if (ctl.pet?.mode === 'idle' && ctl.pet?.expr !== ev.expression) {
+              ctl.setExpr(ev.expression, 2.0);
+            }
+          } else {
+            ctl.setExpr(ev.expression, 3.2);
+          }
+        }
+        if (shouldRunMotion) {
+          ctl.doWord(ev.motion!);
         }
       }
+
       if (ev.speech) {
         speechStateRef.current = { text: ev.speech, idx: 0, nextAt: 0 };
       }
@@ -388,6 +449,7 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
           figure,
           roam: settingsRef.current.roam,
           temperament: settingsRef.current.temperament || 'daily',
+          personaSeed: 17,
           enter: 'drop',
           startX,
           bounds: () => {
@@ -768,13 +830,19 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
       if (currentMap.has(sub.id)) {
         const entry = currentMap.get(sub.id)!;
         entry.item = sub;
-        if (entry.lastStatus !== sub.status) {
+        const statusChanged = entry.lastStatus !== sub.status;
+        const textChanged = entry.lastText !== sub.progressText;
+        if (statusChanged || textChanged) {
+          entry.ctl?.setWorkHint?.(inferSubagentWorkHint(sub));
+        }
+        if (statusChanged) {
           entry.lastStatus = sub.status;
+          entry.lastText = sub.progressText;
           entry.ctl?.setStatus?.(sub.status || null);
           if (sub.status === 'DONE') {
             if (entry.ctl?.pet?.mode === 'sleep') entry.ctl?.doWord?.('stand');
             entry.ctl?.setThinking?.(false);
-            entry.ctl?.setExpr?.('happy', 2.0);
+            entry.ctl?.doWord?.('wave');
           } else if (sub.status === 'THINKING') {
             if (entry.ctl?.pet?.mode === 'sleep') entry.ctl?.doWord?.('stand');
             entry.ctl?.setThinking?.(true);
@@ -785,17 +853,15 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
           } else if (sub.status === 'ERROR') {
             if (entry.ctl?.pet?.mode === 'sleep') entry.ctl?.doWord?.('stand');
             entry.ctl?.setThinking?.(false);
-            entry.ctl?.setExpr?.('flustered', 3.0);
             entry.ctl?.doWord?.('shiver');
+            entry.ctl?.setExpr?.('flustered', 3.0);
           } else if (sub.status === 'WORKING') {
             if (entry.ctl?.pet?.mode === 'sleep') entry.ctl?.doWord?.('stand');
             entry.ctl?.setThinking?.(false);
             entry.ctl?.setExpr?.('determined', 2.5);
           }
-        } else if (entry.lastText !== sub.progressText && sub.status === 'WORKING') {
+        } else if (textChanged) {
           entry.lastText = sub.progressText;
-          entry.ctl?.setExpr?.('determined', 1.8);
-          entry.ctl?.talk?.();
         }
         return;
       }
@@ -878,7 +944,9 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
                 sfx: sfxRef.current,
                 figure,
                 roam: 'off',
-                temperament: 'quiet',
+                temperament: settingsRef.current.temperament || 'daily',
+                personaSeed: hashPersonaSeed(`${finalSub.id}:${finalSub.scheme}:${laneIdx}`),
+                workHint: inferSubagentWorkHint(finalSub),
                 enter: 'drop', // Physical sky-drop with gravity & squash-bounce
                 startX,
                 bounds: () => {
@@ -1092,7 +1160,11 @@ export const WhaleStage = forwardRef<WhaleControllerHandle, WhaleStageProps>(fun
   }, [settings.roam]);
 
   useEffect(() => {
-    ctlRef.current?.setTemperament?.(settings.temperament || 'daily');
+    const nextTemperament = settings.temperament || 'daily';
+    ctlRef.current?.setTemperament?.(nextTemperament);
+    for (const entry of subCtlsRef.current.values()) {
+      entry.ctl?.setTemperament?.(nextTemperament);
+    }
   }, [settings.temperament]);
 
   useEffect(() => {

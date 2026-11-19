@@ -65,8 +65,183 @@ const IDLE_DURATIONS_MS = [280, 110, 110, 140, 140, 320];
 const IDLE_CYCLE_TOTAL_MS = 1100;
 const WAVING_DURATIONS_MS = [140, 140, 140, 280];
 const JUMPING_DURATIONS_MS = [140, 140, 140, 140, 280];
-const FAILED_DURATIONS_MS = [140, 140, 140, 140, 140, 140, 140, 240];
-const WAITING_DURATIONS_MS = [150, 150, 150, 150, 150, 260];
+const FAILED_DURATIONS_MS = [220, 170, 170, 170, 170, 170, 170, 360];
+const WAITING_DURATIONS_MS = [260, 220, 220, 220, 220, 420];
+const YARN_WORK_DURATIONS_MS = [190, 165, 160, 175, 165, 245];
+const REVIEW_DURATIONS_MS = [440, 210, 210, 240, 210, 520];
+
+const WORK_STATUSES = new Set(['THINKING', 'READING', 'CODING', 'RUNNING_CMD', 'WORKING']);
+const WORK_KINDS = ['review', 'idle', 'glance', 'yarn', 'rest', 'greet'];
+// Gentle upward / side-glance sectors: row 9 cols [0, 1, 2, 7] and row 10 cols [0, 1, 6, 7]
+const GENTLE_GLANCE_DIRS = [0, 1, 2, 7, 8, 9, 14, 15];
+const MAX_YARN_BEAT_SEC = 3.5;
+
+function hash32(n) {
+  let x = (Math.imul(n | 0, 0x9e3779b1) ^ 0x85ebca6b) >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x7feb352d) >>> 0;
+  x ^= x >>> 15;
+  x = Math.imul(x, 0x846ca68b) >>> 0;
+  x ^= x >>> 16;
+  return x >>> 0;
+}
+
+function getWorkBeatWeights(status, temperament, workHint) {
+  if (temperament === 'quiet') {
+    if (status === 'READING' || (status === 'WORKING' && workHint === 'read')) {
+      return { review: 64, idle: 26, glance: 10, yarn: 0, rest: 0, greet: 0 };
+    }
+    if (status === 'WORKING' && workHint === 'wait') {
+      return { rest: 40, idle: 42, review: 12, glance: 6, yarn: 0, greet: 0 };
+    }
+    if (status === 'RUNNING_CMD' || (status === 'WORKING' && workHint === 'cmd')) {
+      return { review: 42, idle: 34, rest: 16, glance: 8, yarn: 0, greet: 0 };
+    }
+    if (status === 'CODING' || (status === 'WORKING' && workHint === 'code')) {
+      return { review: 52, idle: 36, glance: 12, yarn: 0, rest: 0, greet: 0 };
+    }
+    return { idle: 44, review: 42, glance: 14, yarn: 0, rest: 0, greet: 0 };
+  }
+
+  if (temperament === 'lively') {
+    if (status === 'THINKING') {
+      return { idle: 24, review: 24, glance: 14, greet: 6, yarn: 32, rest: 0 };
+    }
+    if (status === 'READING') {
+      return { review: 46, idle: 22, glance: 18, greet: 4, yarn: 10, rest: 0 };
+    }
+    if (status === 'CODING') {
+      return { review: 14, idle: 10, glance: 10, greet: 6, yarn: 60, rest: 0 };
+    }
+    if (status === 'RUNNING_CMD') {
+      return { review: 22, idle: 18, rest: 14, glance: 12, greet: 6, yarn: 28 };
+    }
+    if (status === 'WORKING') {
+      if (workHint === 'read') return { review: 46, idle: 22, glance: 18, greet: 4, yarn: 10, rest: 0 };
+      if (workHint === 'wait') return { rest: 36, idle: 34, review: 12, glance: 10, greet: 8, yarn: 0 };
+      if (workHint === 'cmd') return { review: 22, rest: 18, idle: 16, glance: 10, greet: 6, yarn: 28 };
+      if (workHint === 'code') return { review: 16, idle: 12, glance: 10, greet: 6, yarn: 56, rest: 0 };
+      return { review: 22, idle: 20, glance: 14, greet: 8, yarn: 36, rest: 0 };
+    }
+  }
+
+  // daily (default)
+  if (status === 'THINKING') {
+    return { idle: 36, review: 32, glance: 14, yarn: 18, rest: 0, greet: 0 };
+  }
+  if (status === 'READING') {
+    return { review: 58, idle: 26, glance: 16, yarn: 0, rest: 0, greet: 0 };
+  }
+  if (status === 'CODING') {
+    return { review: 20, idle: 15, glance: 8, greet: 3, yarn: 54, rest: 0 };
+  }
+  if (status === 'RUNNING_CMD') {
+    return { review: 28, idle: 22, rest: 18, glance: 10, yarn: 22, greet: 0 };
+  }
+  if (status === 'WORKING') {
+    if (workHint === 'read') return { review: 56, idle: 28, glance: 16, yarn: 0, rest: 0, greet: 0 };
+    if (workHint === 'wait') return { rest: 42, idle: 40, review: 12, glance: 6, yarn: 0, greet: 0 };
+    if (workHint === 'cmd') return { review: 30, rest: 24, idle: 22, glance: 8, yarn: 16, greet: 0 };
+    if (workHint === 'code') return { review: 30, idle: 24, glance: 12, greet: 4, yarn: 30, rest: 0 };
+    return { review: 30, idle: 28, glance: 12, rest: 6, yarn: 24, greet: 0 };
+  }
+  return { review: 36, idle: 34, glance: 14, yarn: 16, rest: 0, greet: 0 };
+}
+
+function pickWeightedKind(weights, u) {
+  let total = 0;
+  for (let i = 0; i < WORK_KINDS.length; i++) {
+    total += Math.max(0, weights[WORK_KINDS[i]] || 0);
+  }
+  if (total <= 0) return 'idle';
+  let r = clamp(u, 0, 0.999999999) * total;
+  for (let i = 0; i < WORK_KINDS.length; i++) {
+    const k = WORK_KINDS[i];
+    const w = Math.max(0, weights[k] || 0);
+    if (w <= 0) continue;
+    r -= w;
+    if (r < 0) return k;
+  }
+  return 'idle';
+}
+
+function pickCalmFallback(weights, u) {
+  const wReview = Math.max(0, weights.review || 0);
+  const wIdle = Math.max(0, weights.idle || 0);
+  const sum = wReview + wIdle;
+  if (sum <= 0) return 'idle';
+  return u * sum < wReview ? 'review' : 'idle';
+}
+
+/**
+ * Pure deterministic choreographer for active work states.
+ * Desynchronizes multiple pets via `personaSeed`-derived block length & phase offset,
+ * forbids consecutive `yarn` blocks, and caps any single `yarn` burst at 3.5s.
+ */
+export function selectWorkBeat({ status, temperament, workHint, t, statusT, personaSeed } = {}) {
+  const st = String(status || '').toUpperCase();
+  const temp = temperament === 'lively' || temperament === 'quiet' || temperament === 'daily' ? temperament : 'daily';
+  const hint = String(workHint || '').toLowerCase();
+  const tNum = Number(t);
+  const stNum = Number(statusT);
+  const rawT =
+    Number.isFinite(tNum) && (tNum !== 0 || !Number.isFinite(stNum) || stNum === 0)
+      ? tNum
+      : Number.isFinite(stNum)
+        ? stNum
+        : 0;
+  const safeT = Math.max(0, rawT);
+  const seed = Number.isFinite(Number(personaSeed)) ? Math.floor(Number(personaSeed)) : 0;
+
+  const seedHash = hash32((seed | 0) + 1);
+  const blockLen = 5.4 + (hash32(seedHash ^ 0x9e3779b9) / 4294967296) * 1.8;
+  const phaseOffsetSec = (hash32(seedHash ^ 0x7f4a7c15) / 4294967296) * blockLen;
+
+  const shiftedT = safeT + phaseOffsetSec;
+  const blockIdx = Math.floor(shiftedT / blockLen);
+  const localT = shiftedT - blockIdx * blockLen;
+
+  const weights = getWorkBeatWeights(st, temp, hint);
+  const u0 = hash32(seedHash ^ 0x45d9f3b) / 4294967296;
+  const rawKindAt = (b) => {
+    // Low-discrepancy golden-ratio sequence avoids clumping/droughts across 180s windows
+    const u = (u0 + (b + 1) * 0.6180339887498949) % 1;
+    return pickWeightedKind(weights, u);
+  };
+
+  let kind = rawKindAt(blockIdx);
+  if (kind === 'yarn') {
+    let rawYarnRunBefore = 0;
+    for (let k = blockIdx - 1; k >= 0 && rawYarnRunBefore < 64; k--) {
+      if (rawKindAt(k) === 'yarn') rawYarnRunBefore++;
+      else break;
+    }
+    if (rawYarnRunBefore % 2 === 1) {
+      const uAlt = hash32(seedHash ^ Math.imul(blockIdx + 1, 0x27d4eb2d)) / 4294967296;
+      kind = pickCalmFallback(weights, uAlt);
+    }
+  }
+
+  let beatElapsed = localT;
+  if (kind === 'yarn' && localT >= MAX_YARN_BEAT_SEC) {
+    const uTail = hash32(seedHash ^ Math.imul(blockIdx + 1, 0x6c8e9cf5)) / 4294967296;
+    kind = pickCalmFallback(weights, uTail);
+    beatElapsed = localT - MAX_YARN_BEAT_SEC;
+  }
+
+  const halfLen = blockLen * 0.5;
+  const glanceSlot = beatElapsed < halfLen ? 0 : 1;
+  const idx0 = hash32(seedHash ^ Math.imul(blockIdx + 1, 0x165667b1)) % GENTLE_GLANCE_DIRS.length;
+  const gStepHash = hash32(seedHash ^ Math.imul(blockIdx + 1, 0x517cc1b7));
+  const idx1 = (idx0 + (gStepHash % 3 === 0 ? 0 : 1 + (gStepHash % 2))) % GENTLE_GLANCE_DIRS.length;
+  const glanceDirIdx = GENTLE_GLANCE_DIRS[glanceSlot === 0 ? idx0 : idx1];
+
+  return {
+    kind,
+    beatElapsed,
+    glanceDirIdx,
+  };
+}
 
 function pickTimedFrame(durationsMs, tSec) {
   let total = 0;
@@ -81,6 +256,62 @@ function pickTimedFrame(durationsMs, tSec) {
   return durationsMs.length - 1;
 }
 
+function resolveGazeCell(frame, codexState, facing) {
+  const mode = frame.mode || 'idle';
+  const isCalmPose = mode === 'idle' || mode === 'sit' || mode === 'look' || mode === 'land';
+  const gaze = frame.gaze;
+  const maxGazeDist = frame.temperament === 'quiet' ? 200 : 360;
+  let gazeDx = 0;
+  let gazeDy = 0;
+  let gazeOk = false;
+
+  if (
+    isCalmPose &&
+    gaze &&
+    gaze.active &&
+    gaze.fresh &&
+    Number(gaze.dist || 0) >= 28 &&
+    Number(gaze.dist || 0) <= maxGazeDist
+  ) {
+    gazeDx = Number(gaze.dx || 0);
+    gazeDy = Number(gaze.dy || 0);
+    gazeOk = Math.hypot(gazeDx, gazeDy) > 0;
+  } else if (mode === 'look') {
+    const look = Array.isArray(frame.look) ? frame.look : [0, 0];
+    gazeDx = look[0] * facing;
+    gazeDy = look[1];
+    gazeOk = Math.hypot(gazeDx, gazeDy) > 1.5;
+  }
+
+  if (!gazeOk) return null;
+
+  // 16 clockwise sectors in screen coordinates (0° = up / 12 o'clock) with 19° hysteresis
+  const deg = ((Math.atan2(gazeDx, -gazeDy) * 180) / Math.PI + 360) % 360;
+  let dirIdx = Math.round(deg / 22.5) % 16;
+  if (typeof codexState.prevLookIdx === 'number') {
+    const prevCenter = codexState.prevLookIdx * 22.5;
+    let diff = Math.abs(deg - prevCenter) % 360;
+    if (diff > 180) diff = 360 - diff;
+    if (diff <= 19) {
+      dirIdx = codexState.prevLookIdx;
+    }
+  }
+  codexState.prevLookIdx = dirIdx;
+  codexState.blinkStartAt = -1;
+  codexState.wasIdle = true;
+  if (dirIdx < 8) {
+    return { row: 9, col: dirIdx, hasBuiltInQuestion: false };
+  }
+  return { row: 10, col: dirIdx - 8, hasBuiltInQuestion: false };
+}
+
+function resolveStatusElapsed(frame, fallbackT) {
+  if (frame.statusT !== undefined && frame.statusT !== null && Number.isFinite(Number(frame.statusT))) {
+    return Number(frame.statusT);
+  }
+  return fallbackT;
+}
+
 /**
  * Select `(row, col)` for `codex-v2-8x11` atlas.
  * Rows:
@@ -91,8 +322,8 @@ function pickTimedFrame(durationsMs, tSec) {
  *  4: jumping (5f: 0..4) + mouse-hold & drag sway (3f: 5=HOLD, 6=left-sway, 7=right-sway)
  *  5: failed (8f)
  *  6: waiting (6f)
- *  7: running / yarn-ball working (6f @ 130ms)
- *  8: review / reading / awaiting-next (6f @ 160ms)
+ *  7: yarn-ball working (6f via YARN_WORK_DURATIONS_MS, capped <= 3.5s)
+ *  8: review / reading (6f via REVIEW_DURATIONS_MS)
  *  9: look 000..157.5 (8f)
  * 10: look 180..337.5 (8f)
  */
@@ -213,68 +444,53 @@ export function selectCodex8x11Cell(frame, _face, codexState = {}) {
     return { row: 6, col: pickTimedFrame(WAITING_DURATIONS_MS, t), hasBuiltInQuestion: false };
   }
 
-  if (
-    status === 'THINKING' ||
-    status === 'CODING' ||
-    status === 'RUNNING_CMD' ||
-    status === 'WORKING'
-  ) {
-    leaveIdle();
-    const col = Math.floor((t * 1000) / 130) % 6;
-    return { row: 7, col, hasBuiltInQuestion: false };
-  }
-
-  if (status === 'READING' || status === 'AWAITING_NEXT') {
-    leaveIdle();
-    const col = Math.floor((t * 1000) / 160) % 6;
-    return { row: 8, col, hasBuiltInQuestion: false };
-  }
-
-  // Gaze tracking in screen coordinates (Rows 9-10: 16 clockwise sectors, 0°=up/12 o'clock)
-  const isCalmPose = mode === 'idle' || mode === 'sit' || mode === 'look' || mode === 'land';
-  const gaze = frame.gaze;
-  const maxGazeDist = frame.temperament === 'quiet' ? 200 : 360;
-  let gazeDx = 0;
-  let gazeDy = 0;
-  let gazeOk = false;
-
-  if (
-    isCalmPose &&
-    gaze &&
-    gaze.active &&
-    gaze.fresh &&
-    Number(gaze.dist || 0) >= 28 &&
-    Number(gaze.dist || 0) <= maxGazeDist
-  ) {
-    gazeDx = Number(gaze.dx || 0);
-    gazeDy = Number(gaze.dy || 0);
-    gazeOk = Math.hypot(gazeDx, gazeDy) > 0;
-  } else if (mode === 'look') {
-    const look = Array.isArray(frame.look) ? frame.look : [0, 0];
-    gazeDx = look[0] * facing;
-    gazeDy = look[1];
-    gazeOk = Math.hypot(gazeDx, gazeDy) > 1.5;
-  }
-
-  if (gazeOk) {
-    const deg = ((Math.atan2(gazeDx, -gazeDy) * 180) / Math.PI + 360) % 360;
-    let dirIdx = Math.round(deg / 22.5) % 16;
-    if (codexState.prevLookIdx !== null) {
-      const prevCenter = codexState.prevLookIdx * 22.5;
-      let diff = Math.abs(deg - prevCenter) % 360;
-      if (diff > 180) diff = 360 - diff;
-      if (diff <= 19) {
-        dirIdx = codexState.prevLookIdx;
-      }
+  if (status === 'AWAITING_NEXT') {
+    const awaitingT = resolveStatusElapsed(frame, t);
+    if (awaitingT >= 0 && awaitingT < 1.1) {
+      leaveIdle();
+      return { row: 3, col: pickTimedFrame(WAVING_DURATIONS_MS, awaitingT), hasBuiltInQuestion: false };
     }
-    codexState.prevLookIdx = dirIdx;
-    codexState.blinkStartAt = -1;
-    codexState.wasIdle = true;
-    if (dirIdx < 8) {
-      return { row: 9, col: dirIdx, hasBuiltInQuestion: false };
-    }
-    return { row: 10, col: dirIdx - 8, hasBuiltInQuestion: false };
   }
+
+  if (WORK_STATUSES.has(status) && mode !== 'look' && mode !== 'sit') {
+    const beat = selectWorkBeat({
+      status,
+      temperament: frame.temperament || 'daily',
+      workHint: frame.workHint || '',
+      t,
+      statusT: Number(frame.statusT || 0),
+      personaSeed: Number(frame.personaSeed || 0),
+    });
+    if (beat.kind === 'review') {
+      leaveIdle();
+      return { row: 8, col: pickTimedFrame(REVIEW_DURATIONS_MS, beat.beatElapsed), hasBuiltInQuestion: false };
+    }
+    if (beat.kind === 'yarn') {
+      leaveIdle();
+      return { row: 7, col: pickTimedFrame(YARN_WORK_DURATIONS_MS, beat.beatElapsed), hasBuiltInQuestion: false };
+    }
+    if (beat.kind === 'rest') {
+      leaveIdle();
+      return { row: 6, col: pickTimedFrame(WAITING_DURATIONS_MS, beat.beatElapsed), hasBuiltInQuestion: false };
+    }
+    if (beat.kind === 'greet') {
+      leaveIdle();
+      return { row: 3, col: pickTimedFrame(WAVING_DURATIONS_MS, beat.beatElapsed), hasBuiltInQuestion: false };
+    }
+    if (beat.kind === 'glance') {
+      const gazeCell = resolveGazeCell(frame, codexState, facing);
+      if (gazeCell) return gazeCell;
+      leaveIdle();
+      const dirIdx = beat.glanceDirIdx;
+      return dirIdx < 8
+        ? { row: 9, col: dirIdx, hasBuiltInQuestion: false }
+        : { row: 10, col: dirIdx - 8, hasBuiltInQuestion: false };
+    }
+    // beat.kind === 'idle': fall through to real mouse gaze tracking + R00 slow blink
+  }
+
+  const gazeCell = resolveGazeCell(frame, codexState, facing);
+  if (gazeCell) return gazeCell;
 
   codexState.prevLookIdx = null;
 
@@ -336,17 +552,54 @@ function selectCompact4x3Cell(frame) {
     return { row: 2, col: 2 + (Math.floor(t * 1.6) % 2) };
   }
 
-  if (status === 'CODING' || status === 'RUNNING_CMD' || status === 'WORKING' || mode === 'dance') {
-    return { row: 2, col: Math.floor(t * 5.2) % 2 };
+  if (mode === 'dance') {
+    return { row: 2, col: Math.floor(t * 4.2) % 2 };
   }
 
   if (
-    status === 'READING' ||
-    status === 'THINKING' ||
     status === 'WAITING_USER' ||
     status === 'ERROR' ||
     mode === 'look' ||
-    mode === 'dizzy' ||
+    mode === 'dizzy'
+  ) {
+    return { row: 0, col: 3 };
+  }
+
+  if (status === 'AWAITING_NEXT') {
+    const awaitingT = resolveStatusElapsed(frame, t);
+    if (awaitingT >= 0 && awaitingT < 1.1) {
+      return { row: 0, col: 2 };
+    }
+  }
+
+  if (WORK_STATUSES.has(status)) {
+    const beat = selectWorkBeat({
+      status,
+      temperament: frame.temperament || 'daily',
+      workHint: frame.workHint || '',
+      t,
+      statusT: Number(frame.statusT || 0),
+      personaSeed: Number(frame.personaSeed || 0),
+    });
+    if (beat.kind === 'yarn') {
+      return { row: 2, col: pickTimedFrame([260, 260], beat.beatElapsed) };
+    }
+    if (beat.kind === 'rest') {
+      return { row: 2, col: 2 + (Math.floor(beat.beatElapsed * 1.3) % 2) };
+    }
+    if (beat.kind === 'greet') {
+      return { row: 0, col: 2 };
+    }
+    if (beat.kind === 'review' || beat.kind === 'glance') {
+      return { row: 0, col: 3 };
+    }
+    if ((frame.blink || 0) > 0.35 || (frame.eyeClose || 0) > 0.4 || (frame.drowse || 0) > 0.65 || fname === 'bowing') {
+      return { row: 0, col: 1 };
+    }
+    return { row: 0, col: 0 };
+  }
+
+  if (
     fname === 'thinking' ||
     fname === 'confused' ||
     fname === 'surprised' ||

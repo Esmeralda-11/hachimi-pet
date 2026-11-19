@@ -330,8 +330,8 @@ function mapToolPresentation(toolName, args = {}) {
     return {
       status: 'RUNNING_CMD',
       badge: `执行 ${shortCmd || '命令'}`,
-      expression: 'excited',
-      motion: 'hop',
+      expression: 'determined',
+      motion: 'nod',
       thinking: false,
     };
   }
