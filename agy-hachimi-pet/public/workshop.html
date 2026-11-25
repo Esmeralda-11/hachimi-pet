@@ -8836,7 +8836,7 @@
 
       const btn = $('btnCreate');
       btn.disabled = true;
-      btn.textContent = useModelAssist ? '模型绘制生成中…' : '正在生成…';
+      btn.textContent = useModelAssist ? '模型绘制全套动作中…' : '正在生成…';
       showToast('');
 
       try {
@@ -8869,7 +8869,11 @@
         renderSmartImport();
         renderFacetedUpload();
 
-        showToast(`已生成并启用「${res.variant?.name || payload.variantName}」`, 'ok');
+        const aiFailedCount = Array.isArray(res.aiSummary?.failedSheets) ? res.aiSummary.failedSheets.length : 0;
+        const fallbackNote = aiFailedCount > 0
+          ? `（其中 ${aiFailedCount} 组动作已用本地补齐，可在下方工作台单独模型重绘）`
+          : '';
+        showToast(`已生成并启用「${res.variant?.name || payload.variantName}」${fallbackNote}`, 'ok');
         if (state.workshopTab !== 'all' && state.workshopTab !== 'bench') {
           setWorkshopTab('bench', { scrollTop: false });
         } else if (state.collapsedSections.bench) {

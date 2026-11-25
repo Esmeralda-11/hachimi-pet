@@ -982,7 +982,7 @@ function runThreeViewBuilder(mode, payload, tmpDir) {
       : '--build';
   const res = spawnSync(pyBin, [THREE_VIEW_SCRIPT_PATH, flag, '--config', cfgPath], {
     encoding: 'utf8',
-    timeout: 90000,
+    timeout: 120000,
     maxBuffer: 40 * 1024 * 1024,
     windowsHide: true,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
@@ -1381,6 +1381,45 @@ function createOrUpdateLocalPack(opts = {}, packsRoot = getPacksRoot()) {
         }
       }
 
+      if (opts.aiSheets && typeof opts.aiSheets === 'object') {
+        const aiDir = path.join(tmpDir, 'ai_sheets');
+        const resolvedAiDir = path.resolve(aiDir);
+        const ALLOWED_AI_EXTS = new Set(['.png', '.webp', '.jpg', '.jpeg']);
+        fs.mkdirSync(aiDir, { recursive: true });
+        const stagedAiSheets = {};
+        for (const [k, entry] of Object.entries(opts.aiSheets)) {
+          if (!entry || !/^[a-z0-9_]{1,32}$/.test(k)) continue;
+          if (typeof entry === 'string') {
+            if (allowFilePaths && fs.existsSync(entry)) {
+              stagedAiSheets[k] = { path: entry };
+            }
+          } else if (typeof entry === 'object') {
+            let filePath = '';
+            if (Buffer.isBuffer(entry.buffer) && entry.buffer.length > 0) {
+              const rawExt = typeof entry.ext === 'string' ? entry.ext.toLowerCase() : '.png';
+              const ext = ALLOWED_AI_EXTS.has(rawExt) ? rawExt : '.png';
+              const candidatePath = path.resolve(aiDir, `${k}${ext}`);
+              if (!candidatePath.startsWith(resolvedAiDir + path.sep)) continue;
+              filePath = candidatePath;
+              fs.writeFileSync(filePath, entry.buffer);
+            } else if (allowFilePaths && typeof entry.path === 'string' && fs.existsSync(entry.path)) {
+              filePath = entry.path;
+            }
+            if (filePath) {
+              stagedAiSheets[k] = {
+                path: filePath,
+                ...(Number.isFinite(Number(entry.cols)) ? { cols: Number(entry.cols) } : {}),
+                ...(Number.isFinite(Number(entry.rows)) ? { rows: Number(entry.rows) } : {}),
+              };
+            }
+          }
+        }
+        if (Object.keys(stagedAiSheets).length > 0) {
+          buildPayload.aiSheets = stagedAiSheets;
+        }
+      }
+      buildPayload.asymmetric = asymmetric;
+
       buildReport = runThreeViewBuilder('build', buildPayload, tmpDir);
       suggestedColor = typeof buildReport.suggestedColor === 'string' ? buildReport.suggestedColor : '';
 
@@ -1399,11 +1438,19 @@ function createOrUpdateLocalPack(opts = {}, packsRoot = getPacksRoot()) {
           engine = 'smart-import-py+cwebp';
           stagedAssetFilename = 'spritesheet.webp';
           stagedAssetPath = path.join(tmpDir, stagedAssetFilename);
-          encodeWebpWithCwebp(cwebpBin, tmpAtlasPng, stagedAssetPath);
+          encodeWebpWithCwebp(cwebpBin, tmpAtlasPng, stagedAssetPath, { lossless: true });
         } else {
-          engine = 'smart-import-py';
-          stagedAssetFilename = 'spritesheet.png';
-          stagedAssetPath = tmpAtlasPng;
+          const webpPyBin = pyBin || findPythonForThreeView();
+          const tmpWebpPath = path.join(tmpDir, 'spritesheet.webp');
+          if (webpPyBin && encodeWebpWithPillow(webpPyBin, tmpAtlasPng, tmpWebpPath, { lossless: true })) {
+            engine = 'smart-import-py+pil-webp';
+            stagedAssetFilename = 'spritesheet.webp';
+            stagedAssetPath = tmpWebpPath;
+          } else {
+            engine = 'smart-import-py';
+            stagedAssetFilename = 'spritesheet.png';
+            stagedAssetPath = tmpAtlasPng;
+          }
         }
       }
     } else if (layout === 'single-image') {
@@ -1460,10 +1507,17 @@ function createOrUpdateLocalPack(opts = {}, packsRoot = getPacksRoot()) {
       if (cwebpBin) {
         stagedAssetFilename = 'spritesheet.webp';
         stagedAssetPath = path.join(tmpDir, stagedAssetFilename);
-        encodeWebpWithCwebp(cwebpBin, tmpAtlasPng, stagedAssetPath);
+        encodeWebpWithCwebp(cwebpBin, tmpAtlasPng, stagedAssetPath, { lossless: true });
       } else {
-        stagedAssetFilename = 'spritesheet.png';
-        stagedAssetPath = tmpAtlasPng;
+        const webpPyBin = pyBin || findPythonForThreeView();
+        const tmpWebpPath = path.join(tmpDir, 'spritesheet.webp');
+        if (webpPyBin && encodeWebpWithPillow(webpPyBin, tmpAtlasPng, tmpWebpPath, { lossless: true })) {
+          stagedAssetFilename = 'spritesheet.webp';
+          stagedAssetPath = tmpWebpPath;
+        } else {
+          stagedAssetFilename = 'spritesheet.png';
+          stagedAssetPath = tmpAtlasPng;
+        }
       }
       storedLayout = layout;
     }
@@ -1565,6 +1619,7 @@ function createOrUpdateLocalPack(opts = {}, packsRoot = getPacksRoot()) {
       warnings: buildReport?.warnings || [],
       items: buildReport?.items || [],
       extraPlacements: buildReport?.extraPlacements || [],
+      aiReport: buildReport?.aiReport || null,
     };
   } catch (err) {
     if (err && err.isHumanError) {
@@ -2368,6 +2423,7 @@ function editLocalPackFrame(opts = {}, packsRoot = getPacksRoot()) {
       dy: Number(opts.dy) || 0,
       scale: Number(opts.scale) || 1.0,
       cleanEdge: Boolean(opts.cleanEdge),
+      asymmetric: Boolean(opts.asymmetric ?? variant.asymmetric),
     }, tmpDir);
 
     if (scope !== 'thumb' && fs.existsSync(tmpOutPng)) {
@@ -2505,7 +2561,7 @@ function prepareModelStyleInputs(opts = {}, packsRoot = getPacksRoot()) {
     customStyleDecoded,
     refAtlasPath,
     refThumbPath,
-    pyBin: findPythonWithPil(),
+    pyBin: findPythonForThreeView() || findPythonWithPil(),
   };
 }
 

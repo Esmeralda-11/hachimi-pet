@@ -117,6 +117,16 @@ function bootstrapElectronRuntime() {
   return bin;
 }
 
+function buildRuntimeEnv({ isElectron }) {
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  if (isElectron) {
+    delete env.ELECTRON_RUN_AS_NODE;
+    delete env.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
+  }
+  return env;
+}
+
 export async function launchPet() {
   if (!fs.existsSync(path.join(APP_DIR, 'electron', 'main.cjs'))) {
     throw new Error(`Missing app payload at ${APP_DIR}`);
@@ -152,10 +162,13 @@ export async function launchPet() {
     runtimeArgs = [APP_DIR, '--sidecar'];
   }
 
+  const childEnv = buildRuntimeEnv({ isElectron: !useWebView2 });
+
   if (FOREGROUND) {
     return await new Promise((resolve) => {
       const child = spawn(runtimeBin, runtimeArgs, {
         cwd: runtimeCwd,
+        env: childEnv,
         stdio: 'inherit',
         windowsHide: useWebView2,
       });
@@ -165,8 +178,10 @@ export async function launchPet() {
   }
 
   let pid = null;
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && (!useWebView2 || !process.versions.electron)) {
     // On Windows, `Win32_Process.Create` escapes sandboxing Job Objects so `/hachimi` persists cleanly!
+    // Skip WMI when launching WebView2 under an Electron host (`ELECTRON_RUN_AS_NODE=1`), since CIM
+    // does not forward custom childEnv without Win32_ProcessStartup.EnvironmentVariables.
     try {
       const esc = (s) => String(s).replace(/'/g, "''");
       const argStr = runtimeArgs.map((a) => `"${esc(a)}"`).join(' ');
@@ -175,6 +190,7 @@ export async function launchPet() {
         : `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"${esc(runtimeBin)}" ${argStr}'; CurrentDirectory = '${esc(runtimeCwd)}' } | Select-Object -ExpandProperty ProcessId`;
       const out = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], {
         encoding: 'utf8',
+        env: childEnv,
         windowsHide: true,
       }).trim();
       pid = Number(out) || null;
@@ -184,6 +200,7 @@ export async function launchPet() {
   if (!pid) {
     const child = spawn(runtimeBin, runtimeArgs, {
       cwd: runtimeCwd,
+      env: childEnv,
       detached: true,
       stdio: 'ignore',
       windowsHide: useWebView2,

@@ -5,7 +5,7 @@
 
   <p>
     <a href="#license"><img src="https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg" alt="License: AGPL-3.0-or-later" /></a>
-    <img src="https://img.shields.io/badge/Antigravity-Plugin%20(Hooks%20%2B%20MCP%20%2B%20Skill)-purple.svg" alt="Antigravity Plugin" />
+    <img src="https://img.shields.io/badge/Antigravity-Plugin%20(Hooks%20%2B%20MCP%20%2B%20Skill%20%2B%20Sidecar)-purple.svg" alt="Antigravity Plugin" />
     <img src="https://img.shields.io/badge/Zero%20Runtime%20Deps-~9.4%20MB-emerald.svg" alt="Zero Runtime Deps" />
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Cross Platform" />
   </p>
@@ -14,7 +14,7 @@
 > [!NOTE]
 > **Fork 来源与致谢**：本插件包来自个人定制派生仓库 [Esmeralda-11/hachimi-pet](https://github.com/Esmeralda-11/hachimi-pet)，派生并致谢原作者 **[hwt675217/hachimi-pet](https://github.com/hwt675217/hachimi-pet)**（`v1.0.0`），延续上游 **GNU Affero General Public License v3.0 or later（`AGPL-3.0-or-later`）** 开源协议并保留全部原有许可与第三方声明。
 >
-> 在原版基础上，本 Fork 新增本地角色工坊（本地工坊页面 `/workshop`）、状态栏可关闭与右键桌宠呼出完整菜单恢复，以及子代理与蜂群精确联动修复；新增功能主要在 **macOS（Electron 运行时）** 下测试验证，且不包含个人私有素材包（自定义角色包存放于本地目录 `~/.hachimi-pet/packs/`）。
+> 在原版基础上，本 Fork 新增 **Antigravity Sidecar 侧边栏控制面板（`哈基米桌宠`）**、本地角色工坊（本地工坊页面 `/workshop`，支持多视角智能导入、双阶段模型协助生成、单组动作模型重绘与无损 `VP8L` 输出）、状态栏可关闭与右键桌宠呼出完整菜单恢复，以及子代理与蜂群精确联动修复；新增功能主要在 **macOS（Electron 运行时）** 下测试验证，且不包含个人私有素材包（自定义角色包存放于本地目录 `~/.hachimi-pet/packs/`）。
 
 ---
 
@@ -75,7 +75,8 @@ agy plugin validate ~/.gemini/config/plugins/hachimi-pet --strict --json
    ```
    桌宠将自动后台拉起（首次启动时若系统未安装全局 Electron，会自动将 `electron@33.3.1` 单次缓存至 `~/.hachimi-pet/runtime`）。
 2. 在 Antigravity 对话期间，模型也可按需调用 MCP 工具 `hachimi_pet_notify` 主动向你挥手、点头、跳舞或发送气泡消息，而**生命周期 Hooks 与增量日志监听器**会自动保持实时进度与指标同步，不会阻塞对话结束。
-3. **系统托盘菜单**（右键任务栏托盘图标）：
+3. **Antigravity Sidecar 侧边栏面板（`哈基米桌宠`）**：在 Antigravity 侧栏直接打开插件面板，可一键开启/关闭/重启桌宠、切换桌面显示与顶部状态栏、调整互动模式与主宠尺寸、点击头像切换角色包，并直达本地工坊（`http://127.0.0.1:17890/workshop`）进行自定义形象导入与模型协助生成/单组重绘。
+4. **系统托盘菜单**（右键任务栏托盘图标）：
    - 切换 8 套哈基米配色
    - 开关自由漫步（Free Roam）/ 语音音效
    - 一键锁定/解锁桌面穿透（快捷键 `Alt + Shift + W`）
@@ -100,8 +101,11 @@ hachimi-pet/
 │       └── SKILL.md            # /hachimi 斜杠命令技能定义
 ├── sidecars/
 │   └── hachimi-pet/
-│       ├── sidecar.json        # Sidecar 守护进程配置
-│       └── entry.mjs           # Sidecar 入口
+│       ├── sidecar.json        # Sidecar 守护进程与 Aux Pane 面板配置
+│       ├── entry.mjs           # Sidecar 后端路由、离线扫描与进程拉起控制
+│       ├── index.html          # Sidecar 侧边栏控制面板页面
+│       ├── styles.css          # 侧边栏面板亮暗自适应样式
+│       └── app.js              # 侧边栏面板状态轮询与交互逻辑
 ├── scripts/
 │   ├── hook-forwarder.mjs      # <75ms 超时兜底的 Hook 转发器
 │   ├── launch-pet.mjs          # 跨平台守护拉起与 ~/.hachimi-pet/runtime 缓存引导

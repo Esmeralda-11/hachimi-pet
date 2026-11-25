@@ -5,7 +5,7 @@
 
   <p>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg" alt="License: AGPL-3.0-or-later" /></a>
-    <img src="https://img.shields.io/badge/Antigravity-Plugin%20(Hooks%20%2B%20MCP%20%2B%20Skill)-purple.svg" alt="Antigravity Plugin" />
+    <img src="https://img.shields.io/badge/Antigravity-Plugin%20(Hooks%20%2B%20MCP%20%2B%20Skill%20%2B%20Sidecar)-purple.svg" alt="Antigravity Plugin" />
     <img src="https://img.shields.io/badge/Windows-Native%20WebView2%20(~0.8%20MB)-0078D4.svg" alt="Windows WebView2" />
     <img src="https://img.shields.io/badge/macOS%20%2F%20Linux-Electron%20Fallback-lightgrey.svg" alt="Cross Platform" />
   </p>
@@ -103,7 +103,8 @@
 
 在原版 `v1.0.0` 基础上，本派生分支补充了以下定制功能与修复：
 
-- **自定义角色包与本地设置工坊（本地工坊页面 `/workshop`）**：支持本地自定义精灵图集导入、多角度/分面图片导入与自动抠图切帧、逐帧检视预览，以及极简亮暗双模与多主题色系设置页。
+- **Antigravity Sidecar 侧边栏控制面板（`哈基米桌宠`）**：内置原生 Aux Pane 侧边栏 Web 面板，支持一键开关/重启桌宠、桌面显示与顶部状态栏切换、互动模式与主宠尺寸调节，以及可视化缩略图快速切换角色包（含离线扫描与状态轮询）。
+- **自定义角色包与本地设置工坊（本地工坊页面 `/workshop`）**：支持本地自定义精灵图集导入、多角度/分面图片导入与自动抠图切帧、**双阶段多表模型协助生成与单组动作模型重绘**（含 16 方向 360° 视线、追蝴蝶奔跑、拨毛线、提领晃动等全动作无损 `VP8L` WebP 输出）、逐帧检视预览，以及极简亮暗双模与多主题色系设置页。
 - **子代理与蜂群精确联动修复**：修正桌面子代理数量与实际运行中子代理/蜂群成员的对应关系，任务结束后干净退场。
 - **状态栏与桌面交互优化**：5 段式状态栏菜单重排，新增「关闭状态栏」与右键桌面宠物呼出完整菜单恢复；支持主宠与子代理独立大中小尺寸调节、性格模式（活泼 / 日常 / 内敛）及头顶 4 项提示独立开关，并优化 macOS 状态栏图标居中与留白效果。
 
@@ -121,7 +122,7 @@
 
 | 目录 | 说明 |
 | :--- | :--- |
-| [`hachimi-pet/`](./hachimi-pet/) | **Antigravity 插件本体（~9.9 MB）**：包含 `plugin.json`、`hooks.json`、`mcp_config.json`、`skills/hachimi/`、`rules/AGENTS.md`、Windows 原生 WebView2 轻壳与打包产物，可直接安装使用 |
+| [`hachimi-pet/`](./hachimi-pet/) | **Antigravity 插件本体（~9.9 MB）**：包含 `plugin.json`、`hooks.json`、`mcp_config.json`、`skills/hachimi/`、`sidecars/hachimi-pet/`、`rules/AGENTS.md`、Windows 原生 WebView2 轻壳与打包产物，可直接安装使用 |
 | [`agy-hachimi-pet/`](./agy-hachimi-pet/) | **完整源码工程**：React + TypeScript + Vite 前端（`src/`）、Node.js 桥接与目录/遥测监听引擎（`electron/`）、Windows 原生 WebView2 透明壳源码（`shell-win32/HachimiPetShell.cs`）、哈基米骨骼模型与 8 套配色资产（`public/`） |
 
 ---

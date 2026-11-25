@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:,">
+  <title>哈基米桌宠</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="pane-root">
+    <main class="pane" id="pane" aria-label="哈基米桌宠控制面板">
+      <!-- Hero Master Switch Card -->
+      <section class="card hero-card" aria-label="桌宠开关与快捷操作">
+        <div class="hero-top">
+          <div class="hero-identity">
+            <span id="status-dot" class="status-dot is-off" aria-hidden="true"></span>
+            <div class="hero-titles">
+              <div class="hero-heading-row">
+                <h1 class="hero-title">哈基米桌宠</h1>
+                <span id="status-badge" class="status-badge is-off" role="status" aria-live="polite">检测中…</span>
+              </div>
+              <div id="active-summary" class="hero-subtitle">正在读取当前形象…</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            id="power-switch"
+            class="toggle-switch toggle-switch--lg"
+            role="switch"
+            aria-checked="false"
+            aria-label="桌宠主开关"
+            disabled
+          >
+            <span class="toggle-track" aria-hidden="true">
+              <span class="toggle-thumb"></span>
+            </span>
+          </button>
+        </div>
+
+        <div class="hero-actions">
+          <button type="button" id="btn-restart" class="action-btn" disabled>
+            <svg class="icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.25 8a5.25 5.25 0 1 1-1.2-3.35" />
+              <path d="M13.5 2.75v2.75h-2.75" />
+            </svg>
+            <span>一键重启</span>
+          </button>
+          <button type="button" id="btn-wave" class="action-btn" disabled>
+            <svg class="icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.5 9.25V5.25a1 1 0 1 1 2 0v2.5" />
+              <path d="M6.5 7.5V3.75a1 1 0 1 1 2 0v3.75" />
+              <path d="M8.5 7.5V4.5a1 1 0 1 1 2 0v3.25" />
+              <path d="M10.5 7.75V6.25a1 1 0 1 1 2 0v3.75a4 4 0 0 1-4 4h-.75a3.75 3.75 0 0 1-3.4-2.18L3.1 9.15a1 1 0 0 1 1.4-1.3" />
+            </svg>
+            <span>打招呼</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Quick Controls Card -->
+      <section class="card controls-card" id="controls-card" aria-label="显示与互动控制">
+        <div class="controls-toggles">
+          <div class="control-row">
+            <span class="control-label" id="lbl-pet-visible">桌面显示</span>
+            <button
+              type="button"
+              id="toggle-pet-visible"
+              class="toggle-switch"
+              role="switch"
+              aria-checked="true"
+              aria-labelledby="lbl-pet-visible"
+              disabled
+            >
+              <span class="toggle-track" aria-hidden="true">
+                <span class="toggle-thumb"></span>
+              </span>
+            </button>
+          </div>
+
+          <div class="control-row">
+            <span class="control-label" id="lbl-tray-visible">顶部状态栏</span>
+            <button
+              type="button"
+              id="toggle-tray-visible"
+              class="toggle-switch"
+              role="switch"
+              aria-checked="true"
+              aria-labelledby="lbl-tray-visible"
+              disabled
+            >
+              <span class="toggle-track" aria-hidden="true">
+                <span class="toggle-thumb"></span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="control-block">
+          <span class="control-label" id="lbl-temperament">互动模式</span>
+          <div class="segmented" id="temperament-group" role="radiogroup" aria-labelledby="lbl-temperament">
+            <button type="button" class="seg-btn" role="radio" aria-checked="true" data-temperament="daily" disabled>日常</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-temperament="quiet" disabled>内敛</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-temperament="lively" disabled>活泼</button>
+          </div>
+        </div>
+
+        <div class="control-block">
+          <div class="slider-header">
+            <label class="control-label" for="scale-slider">主宠尺寸</label>
+            <output class="slider-value" id="scale-value" for="scale-slider">85%</output>
+          </div>
+          <input
+            type="range"
+            id="scale-slider"
+            class="scale-slider"
+            min="35"
+            max="140"
+            step="5"
+            value="85"
+            aria-valuetext="85%"
+            disabled
+          >
+        </div>
+      </section>
+
+      <!-- Character Switcher Grid -->
+      <section class="card packs-card" aria-labelledby="packs-heading">
+        <div class="section-header">
+          <h2 class="section-title" id="packs-heading">形象切换</h2>
+          <span id="packs-active-pill" class="active-pill hidden"></span>
+        </div>
+        <div id="packs-container" class="packs-list">
+          <div class="packs-loading" aria-live="polite">正在加载形象包…</div>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="pane-footer">
+        <a
+          id="workshop-link"
+          class="footer-link"
+          href="http://127.0.0.1:17890/workshop"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>完整桌宠设置工坊</span>
+          <svg class="icon" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6.75 3.5H4.5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9.25" />
+            <path d="M9.5 3.5h3v3M12.5 3.5 7.5 8.5" />
+          </svg>
+        </a>
+        <button type="button" id="btn-copy-workshop" class="footer-copy-btn">复制地址</button>
+      </footer>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden" role="status" aria-live="polite">
+      <span id="toast-text" class="toast-text"></span>
+      <button type="button" id="toast-close" class="toast-close" aria-label="关闭提示">
+        <svg class="icon" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

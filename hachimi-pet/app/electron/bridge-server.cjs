@@ -1075,12 +1075,12 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
               atlasPath,
               thumbPath,
               row: rowNum,
-              instruction: isHoldSub
-                ? `${String(body.instruction || '').trim() ? String(body.instruction).trim() + '. ' : ''}Draw 3 frames of the character being gently held by the scruff in mid-air: frame 1 still scruff-dangle facing forward, frame 2 swaying gently left, frame 3 swaying gently right.`
-                : String(body.instruction || '').trim(),
+              rowCode: isHoldSub ? 'R04H' : '',
+              instruction: String(body.instruction || '').trim(),
+              asymmetric: Boolean(inspected.variant?.asymmetric),
               refImageBuffer: refDecoded?.buffer || null,
               refImageExt: refDecoded?.ext || '.png',
-              pyBin: packRegistry.findPythonWithPil(),
+              pyBin: (typeof packRegistry.findPythonForThreeView === 'function' ? packRegistry.findPythonForThreeView() : '') || packRegistry.findPythonWithPil(),
             });
             editPayload = {
               ...body,
@@ -1089,6 +1089,7 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
               rowCode: isHoldSub ? 'R04H' : body.rowCode,
               colStart: isHoldSub ? 5 : body.colStart,
               activeCols: isHoldSub ? 3 : body.activeCols,
+              asymmetric: Boolean(body.asymmetric ?? inspected.variant?.asymmetric),
               imageDataUrl: redrawn.buffer,
               allowFilePaths: false,
             };
@@ -1142,9 +1143,11 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
             inputs: body.inputs,
             facets: body.facets,
             threeViewOptions: body.threeViewOptions,
+            aiSheets: undefined,
             allowFilePaths: false,
           };
 
+          let aiSummary = null;
           if (body.modelAssist === true) {
             const prep = prepareModelStyleInputs({ ...body, allowFilePaths: false });
             styleStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hachimi-style-anchor-'));
@@ -1159,15 +1162,19 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
             const stylized = await generateStylizedTurnaround({
               subjectFiles: prep.subjectFiles,
               styleRefPath: hasStyleRef ? stylePng : '',
+              styleAtlasPath: (!prep.customStyleDecoded && prep.refAtlasPath) ? prep.refAtlasPath : '',
               variantName: String(body.variantName || '').trim(),
+              asymmetric: Boolean(body.asymmetric),
               pyBin: prep.pyBin,
             });
+            aiSummary = stylized.summary || null;
             createOpts = {
               ...body,
               layout: 'auto',
               files: (Array.isArray(stylized.files) && stylized.files.length > 0)
                 ? stylized.files
                 : [{ name: stylized.name, buffer: stylized.buffer }],
+              aiSheets: stylized.aiSheets || undefined,
               inputs: undefined,
               facets: undefined,
               allowFilePaths: false,
@@ -1189,6 +1196,8 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
             variant: created.variant,
             engine: body.modelAssist === true ? `ai-style+${created.engine}` : created.engine,
             suggestedColor: created.suggestedColor,
+            aiSummary,
+            aiReport: created.aiReport || null,
             packs,
             activePack: getActivePack(),
           });
@@ -2634,6 +2643,7 @@ function createBridgeServer({ port = DEFAULT_PORT, onShowPanel, onCheckPixels, o
           reject(err);
         }
       });
+      server.requestTimeout = 12 * 60 * 1000;
       server.listen(port, '127.0.0.1', () => {
         console.log(`[BridgeServer] Listening on http://127.0.0.1:${port}`);
         resolve({ port, reused: false });

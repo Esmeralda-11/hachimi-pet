@@ -13,7 +13,8 @@ When the user activates `/hachimi` (or asks to launch/summon the Hachimi desktop
 ## Local Pet Packs & Workshop (`/workshop`)
 
 - **Local packs directory**: `~/.hachimi-pet/packs/<packId>/pack.json` (private local storage outside the plugin directory; built-in Pack A `hachimi` is always available, and local packs appear as slots `B`, `C`, ... in the tray menu and workshop).
-- **Visual Studio (`/workshop`)**: Open `http://127.0.0.1:17890/workshop` (or click `设置…` in the tray/context menu) to preview and hot-switch between installed packs/members, spawn/clear test subagents, copy the "锚点图 → 4×3 绿幕动作表" AI prompt, or upload `compact-4x3`, `single-image` (PNG/GIF/WebP), or `codex-v2-8x11` spritesheets.
+- **Sidecar Control Panel (`哈基米桌宠`)**: Use the built-in Antigravity Aux Pane sidecar panel to toggle pet power/restart, desktop/tray visibility, temperament, scale, and quick character switching (works offline too).
+- **Visual Studio (`/workshop`)**: Open `http://127.0.0.1:17890/workshop` (or click `设置…` in the tray/context menu or footer link in the Sidecar panel) to preview and hot-switch between installed packs/members, spawn/clear test subagents, run smart `auto` / 7-facet multi-view import with optional two-stage AI model-assisted generation (`modelAssist`) and per-row AI redraw (`ai_redraw_row`), copy the "锚点图 → 4×3 绿幕动作表" AI prompt, or upload `compact-4x3`, `single-image` (PNG/GIF/WebP), or `codex-v2-8x11` spritesheets.
 - **CLI Pack Builder (`pack-builder.mjs`)**: Create or update a local pack from local images and reload the running bridge:
   ```bash
   node "<plugin_dir>/scripts/pack-builder.mjs" \
